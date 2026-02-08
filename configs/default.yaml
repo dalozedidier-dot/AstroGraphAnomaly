@@ -1,0 +1,32 @@
+engine: isolation_forest
+threshold:
+  strategy: contamination   # contamination | percentile | top_k | score
+  contamination: 0.05
+  percentile: 95
+  top_k: 50
+  score: 1.0
+
+graph:
+  knn_k: 8
+  include_self: false
+
+features:
+  mode: extended            # basic | extended
+  betweenness:
+    enabled: true
+    k: 300                  # None = exact, else approximate with k samples
+    seed: 42
+  communities:
+    method: louvain         # louvain | greedy
+  articulation_points: true
+  bridges: true
+
+explain:
+  explain_top: 10
+  lime_num_features: 8
+  llm_prompt_template: default
+
+plots:
+  enabled: true
+
+random_seed: 42

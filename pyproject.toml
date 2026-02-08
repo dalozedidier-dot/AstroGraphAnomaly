@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "astrographanomaly"
+version = "0.2.0"
+description = "Few-label anomaly detection on astronomical catalogs (Gaia) with graph structure; optional Hubble/HST catalog ingestion; explainability via LIME and LLM prompt generation."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [{name = "DD Conscience"}]
+dependencies = [
+  "numpy>=1.23",
+  "pandas>=2.0",
+  "scikit-learn>=1.3",
+  "networkx>=3.1",
+  "matplotlib>=3.7",
+  "pyyaml>=6.0",
+  "astropy>=5.3",
+  "lime>=0.2.0.1",
+]
+
+[project.optional-dependencies]
+gaia = ["astroquery>=0.4.6"]
+hubble = ["astroquery>=0.4.6"]
+pineforest = ["coniferest>=0.4.0"]
+
+[project.scripts]
+aga = "astrographanomaly.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
