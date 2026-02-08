@@ -24,7 +24,7 @@ jobs:
       - name: Install test deps (pytest)
         run: pip install pytest
 
-      # Optionnel: garde le support "package" si tu as pyproject/setup
+      # Optionnel (garde si tu veux tester aussi la voie package)
       - name: Optional editable install (if packaging exists)
         run: |
           if [ -f pyproject.toml ] || [ -f setup.py ]; then
@@ -49,11 +49,26 @@ jobs:
       - name: Install runtime deps
         run: pip install -r requirements.txt
 
-      - name: Run workflow smoke (no package)
+      - name: Run workflow smoke (no bash if/fi)
         run: |
-          mkdir -p results/ci_smoke
+          python - <<'PY'
+          import os, subprocess, sys
+          os.makedirs("results/ci_smoke", exist_ok=True)
 
-          if [ -f workflow.py ]; then
-            python workflow.py csv --in-csv data/sample_gaia_like.csv --out results/ci_smoke --top-k 10
-          elif [ -f run_workflow.py ]; then
-            pyt
+          if os.path.exists("workflow.py"):
+              cmd = [sys.executable, "workflow.py", "csv",
+                     "--in-csv", "data/sample_gaia_like.csv",
+                     "--out", "results/ci_smoke",
+                     "--top-k", "10"]
+          elif os.path.exists("run_workflow.py"):
+              cmd = [sys.executable, "run_workflow.py",
+                     "--mode", "csv",
+                     "--in-csv", "data/sample_gaia_like.csv",
+                     "--out", "results/ci_smoke",
+                     "--top-k", "10"]
+          else:
+              raise SystemExit("ERROR: no workflow entrypoint found (workflow.py or run_workflow.py)")
+
+          print("Running:", " ".join(cmd))
+          subprocess.check_call(cmd)
+          PY
