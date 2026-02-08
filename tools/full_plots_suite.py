@@ -1,382 +1,365 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
-AstroGraphAnomaly — Full Plots Suite (workflow-first, no packaging required)
+tools/full_plots_suite.py
 
-Entrées:
-  - scored.csv (obligatoire)
-  - graph_full.graphml (optionnel mais recommandé)
+Generate the "full plots" gallery for a run (offline-friendly).
 
-Sorties (plots "curated", contrat stable):
+This script is used by CI like:
+  python tools/full_plots_suite.py \
+    --scored results/<run>/scored.csv \
+    --out results/<run>/plots \
+    --top-k 30 \
+    --graph results/<run>/graph_full.graphml \
+    --write-enriched
+
+Outputs (into --out):
   - score_hist.png
   - ra_dec_score.png
-  - top_anomalies_scores.png
-  - mean_features_anom_vs_normal.png
   - pca_2d.png
+  - mean_features_anom_vs_normal.png
+  - top_anomalies_scores.png
   - mag_vs_distance.png
-  - graph_communities_anomalies.png
-  - cmd_bp_rp_vs_g.png
+  - graph_communities_anomalies.png   (if --graph provided)
 
-Sorties additionnelles (si possible):
-  - graph_metrics.json
-  - scored_enriched.csv (si graph fourni et métriques calculées)
+If --write-enriched is set, writes:
+  - <scored_dir>/scored_enriched.csv
 
-Usage:
-  python tools/full_plots_suite.py \
-    --scored results/run/scored.csv \
-    --graph  results/run/graph_full.graphml \
-    --out    results/run/plots \
-    --top-k  30
+Hotfix included:
+  Matplotlib >= 3.9 requires an explicit Axes for colorbar() in some cases.
+  We always pass ax=... to avoid:
+    ValueError: Unable to determine Axes to steal space for Colorbar
 """
 
 from __future__ import annotations
 
 import argparse
-import json
+import os
 from pathlib import Path
-from typing import Dict, Tuple, List
+from typing import Iterable
 
 import numpy as np
 import pandas as pd
 
-import matplotlib
-matplotlib.use("Agg")  # CI-safe
-import matplotlib.pyplot as plt
+# Force non-interactive backend (CI / headless)
+os.environ.setdefault("MPLBACKEND", "Agg")
+
+import matplotlib.pyplot as plt  # noqa: E402
 
 
-def robust_unit_interval(x: np.ndarray) -> np.ndarray:
+def _safe_mkdir(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+
+
+def _minmax01(x: np.ndarray) -> np.ndarray:
     x = np.asarray(x, dtype=float)
-    x = np.where(np.isfinite(x), x, np.nan)
-    lo = np.nanpercentile(x, 5)
-    hi = np.nanpercentile(x, 95)
-    if not np.isfinite(lo) or not np.isfinite(hi) or (hi - lo) < 1e-12:
-        lo = np.nanmin(x)
-        hi = np.nanmax(x)
-        if not np.isfinite(lo) or not np.isfinite(hi) or (hi - lo) < 1e-12:
-            return np.zeros_like(x, dtype=float)
-    y = (x - lo) / (hi - lo)
-    y = np.clip(y, 0.0, 1.0)
-    y = np.where(np.isfinite(y), y, 0.0)
-    return y
+    mn = np.nanmin(x)
+    mx = np.nanmax(x)
+    denom = mx - mn
+    if not np.isfinite(denom) or denom <= 0:
+        return np.zeros_like(x, dtype=float)
+    return (x - mn) / denom
 
 
-def ensure_core_columns(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-
-    if "source_id" in df.columns:
-        df["source_id"] = df["source_id"].astype(str)
-
-    if "anomaly_score" not in df.columns:
-        df["anomaly_score"] = 0.0
-    df["anomaly_score"] = pd.to_numeric(df["anomaly_score"], errors="coerce").fillna(0.0)
-
-    if "anomaly_label" not in df.columns:
-        thr = np.nanpercentile(df["anomaly_score"].to_numpy(float), 95)
-        df["anomaly_label"] = np.where(df["anomaly_score"].to_numpy(float) >= thr, -1, 1)
-
-    df["anomaly_score_norm"] = robust_unit_interval(df["anomaly_score"].to_numpy(float))
-    return df
+def _pick(df: pd.DataFrame, candidates: Iterable[str]) -> str | None:
+    for c in candidates:
+        if c in df.columns:
+            return c
+    return None
 
 
-def save(fig, out_dir: Path, name: str) -> None:
-    out_dir.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_dir / name, dpi=240, bbox_inches="tight")
+def plot_score_hist(df: pd.DataFrame, out_dir: Path) -> None:
+    col = _pick(df, ["anomaly_score", "score"])
+    if not col:
+        return
+    plt.figure(figsize=(10, 6))
+    plt.hist(df[col].values, bins=60)
+    plt.title("Distribution of anomaly scores")
+    plt.xlabel("anomaly_score")
+    plt.ylabel("count")
+    plt.tight_layout()
+    plt.savefig(out_dir / "score_hist.png", dpi=200)
+    plt.close()
+
+
+def plot_ra_dec_score(df: pd.DataFrame, out_dir: Path) -> None:
+    if not {"ra", "dec"}.issubset(df.columns):
+        return
+    score_col = _pick(df, ["anomaly_score_norm", "anomaly_score", "score"])
+    if not score_col:
+        return
+    fig, ax = plt.subplots(figsize=(10, 7))
+    sc = ax.scatter(df["ra"].values, df["dec"].values, c=df[score_col].values, s=10)
+    ax.set_title("RA/DEC colored by anomaly score")
+    ax.set_xlabel("ra (deg)")
+    ax.set_ylabel("dec (deg)")
+    fig.colorbar(sc, ax=ax, label=score_col)
+    fig.tight_layout()
+    fig.savefig(out_dir / "ra_dec_score.png", dpi=200)
     plt.close(fig)
 
 
-def plot_score_hist(df: pd.DataFrame):
-    fig = plt.figure(figsize=(10, 6))
-    plt.hist(df["anomaly_score"].to_numpy(float), bins=50, alpha=0.85)
-    plt.title("Distribution des Scores d'Anomalie")
-    plt.xlabel("Score d'Anomalie")
-    plt.ylabel("Fréquence")
-    plt.grid(alpha=0.25)
-    return fig
+def plot_pca_2d(df: pd.DataFrame, out_dir: Path) -> None:
+    # Optional dependency; skip cleanly if unavailable.
+    try:
+        from sklearn.decomposition import PCA
+        from sklearn.preprocessing import StandardScaler
+    except Exception:
+        return
 
-
-def plot_ra_dec_score(df: pd.DataFrame):
-    fig = plt.figure(figsize=(10, 6))
-    if "ra" in df.columns and "dec" in df.columns:
-        ra = pd.to_numeric(df["ra"], errors="coerce").fillna(0.0).to_numpy(float)
-        dec = pd.to_numeric(df["dec"], errors="coerce").fillna(0.0).to_numpy(float)
-        sc = plt.scatter(ra, dec, s=35, alpha=0.85, c=df["anomaly_score_norm"].to_numpy(float))
-        plt.title("Spatial Distribution of Nodes (RA vs Dec) colored by Score")
-        plt.xlabel("Right Ascension (RA)")
-        plt.ylabel("Declination (Dec)")
-        plt.colorbar(sc, label="Anomaly Score (norm)")
-        plt.grid(alpha=0.25)
-    else:
-        plt.text(0.5, 0.5, "Missing ra/dec columns", ha="center", va="center")
-        plt.axis("off")
-    return fig
-
-
-def plot_top_bar(df: pd.DataFrame, top_k: int):
-    fig = plt.figure(figsize=(14, 6))
-    d = df.sort_values("anomaly_score", ascending=False).head(top_k).copy()
-
-    labels = d["source_id"].astype(str).tolist() if "source_id" in d.columns else [str(i) for i in range(len(d))]
-    y = d["anomaly_score"].to_numpy(float)
-
-    plt.bar(range(len(d)), y, alpha=0.9)
-    plt.title("Anomaly Score per Anomalous Source ID (Top-K)")
-    plt.xlabel("Source ID (Anomalous Candidates)")
-    plt.ylabel("Anomaly Score")
-    plt.xticks(range(len(d)), labels, rotation=90)
-    plt.grid(axis="y", alpha=0.25)
-    return fig
-
-
-def plot_mean_features(df: pd.DataFrame):
-    fig = plt.figure(figsize=(14, 7))
-    df = df.copy()
-    df["group"] = np.where(df["anomaly_label"].to_numpy(int) == -1, "Anomalous", "Normal")
-
-    candidates = [
-        "phot_g_mean_mag", "bp_rp", "parallax", "pmra", "pmdec", "distance",
-        "degree", "clustering", "kcore", "betweenness"
+    feature_candidates = [
+        "parallax",
+        "pmra",
+        "pmdec",
+        "phot_g_mean_mag",
+        "distance",
     ]
-    feats = [c for c in candidates if c in df.columns]
-    if len(feats) == 0:
-        plt.text(0.5, 0.5, "No comparable features found", ha="center", va="center")
-        plt.axis("off")
-        return fig
+    feats = [c for c in feature_candidates if c in df.columns]
+    if len(feats) < 2:
+        return
 
-    m = df.groupby("group")[feats].mean(numeric_only=True)
-    x = np.arange(len(feats))
-    width = 0.38
+    X = df[feats].replace([np.inf, -np.inf], np.nan).fillna(df[feats].median(numeric_only=True)).values
+    Xs = StandardScaler().fit_transform(X)
+    p = PCA(n_components=2, random_state=0).fit_transform(Xs)
 
-    plt.bar(x - width/2, m.loc["Anomalous"].to_numpy(float), width, label="Anomalous", alpha=0.85)
-    plt.bar(x + width/2, m.loc["Normal"].to_numpy(float), width, label="Normal", alpha=0.85)
-    plt.xticks(x, feats)
-    plt.ylabel("Mean Value")
-    plt.title("Comparison of Mean Feature Values: Anomalous vs. Normal")
-    plt.legend()
-    plt.grid(axis="y", alpha=0.35)
-    return fig
+    score_col = _pick(df, ["anomaly_score_norm", "anomaly_score", "score"])
+    c = df[score_col].values if score_col else None
 
-
-def plot_pca(df: pd.DataFrame):
-    fig = plt.figure(figsize=(10, 8))
-    ignore = {"source_id", "group"}
-    numeric_cols = [c for c in df.columns if c not in ignore and pd.api.types.is_numeric_dtype(df[c])]
-    numeric_cols = [c for c in numeric_cols if c not in ("anomaly_label",)]
-
-    if len(numeric_cols) < 2:
-        plt.text(0.5, 0.5, "Not enough numeric columns for PCA", ha="center", va="center")
-        plt.axis("off")
-        return fig
-
-    X = df[numeric_cols].replace([np.inf, -np.inf], np.nan).fillna(0.0).to_numpy(float)
-    X = (X - X.mean(axis=0)) / (X.std(axis=0) + 1e-12)
-
-    U, S, _ = np.linalg.svd(X, full_matrices=False)
-    Z = U[:, :2] * S[:2]
-
-    colors = np.where(df["anomaly_label"].to_numpy(int) == -1, 1.0, 0.0)
-    plt.scatter(Z[:, 0], Z[:, 1], s=22, alpha=0.78, c=colors)
-    plt.title("PCA 2D (colored: anomalous vs normal)")
-    plt.xlabel("PC1")
-    plt.ylabel("PC2")
-    plt.grid(alpha=0.25)
-    return fig
+    fig, ax = plt.subplots(figsize=(9, 7))
+    sc = ax.scatter(p[:, 0], p[:, 1], c=c, s=10) if c is not None else ax.scatter(p[:, 0], p[:, 1], s=10)
+    ax.set_title("PCA 2D projection")
+    ax.set_xlabel("PC1")
+    ax.set_ylabel("PC2")
+    if c is not None:
+        fig.colorbar(sc, ax=ax, label=score_col)
+    fig.tight_layout()
+    fig.savefig(out_dir / "pca_2d.png", dpi=200)
+    plt.close(fig)
 
 
-def plot_mag_distance(df: pd.DataFrame):
-    fig = plt.figure(figsize=(10, 6))
-    if "phot_g_mean_mag" in df.columns and "distance" in df.columns:
-        dist = pd.to_numeric(df["distance"], errors="coerce").fillna(0.0).to_numpy(float)
-        g = pd.to_numeric(df["phot_g_mean_mag"], errors="coerce").fillna(0.0).to_numpy(float)
-        sc = plt.scatter(dist, g, s=22, alpha=0.75, c=df["anomaly_score_norm"].to_numpy(float))
-        plt.gca().invert_yaxis()
-        plt.title("G magnitude vs Distance (colored by score)")
-        plt.xlabel("Distance (pc)")
-        plt.ylabel("G-band magnitude")
-        plt.colorbar(sc, label="Anomaly Score (norm)")
-        plt.grid(alpha=0.25)
+def plot_mean_features(df: pd.DataFrame, out_dir: Path) -> None:
+    if "anomaly_label" not in df.columns:
+        return
+
+    numeric_cols = [
+        c for c in df.columns
+        if c not in {"source_id"} and pd.api.types.is_numeric_dtype(df[c])
+    ]
+    # Avoid plotting score columns twice; keep a compact set.
+    keep = [c for c in numeric_cols if c not in {"anomaly_score_norm"}]
+    keep = keep[:8] if len(keep) > 8 else keep
+    if not keep:
+        return
+
+    means = df.groupby("anomaly_label")[keep].mean(numeric_only=True)
+    # Ensure stable order (-1 first, then 1) if present.
+    means = means.reindex(sorted(means.index.tolist()))
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+    means.T.plot(kind="bar", ax=ax)
+    ax.set_title("Mean features: anomalies vs normal")
+    ax.set_xlabel("feature")
+    ax.set_ylabel("mean value")
+    plt.xticks(rotation=45, ha="right")
+    fig.tight_layout()
+    fig.savefig(out_dir / "mean_features_anom_vs_normal.png", dpi=200)
+    plt.close(fig)
+
+
+def plot_top_anomalies(df: pd.DataFrame, out_dir: Path, top_k: int) -> None:
+    score_col = _pick(df, ["anomaly_score", "score"])
+    if not score_col:
+        return
+
+    top = df.sort_values(score_col, ascending=False).head(top_k).copy()
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+    ax.bar(range(len(top)), top[score_col].values)
+    ax.set_title(f"Top {top_k} anomalies by score")
+    ax.set_xlabel("rank")
+    ax.set_ylabel(score_col)
+    fig.tight_layout()
+    fig.savefig(out_dir / "top_anomalies_scores.png", dpi=200)
+    plt.close(fig)
+
+
+def plot_mag_vs_distance(df: pd.DataFrame, out_dir: Path) -> None:
+    mag_col = _pick(df, ["phot_g_mean_mag", "mag", "phot_g_mean_mag"])
+    dist_col = _pick(df, ["distance"])
+    if not mag_col or not dist_col:
+        return
+    score_col = _pick(df, ["anomaly_score_norm", "anomaly_score", "score"])
+
+    fig, ax = plt.subplots(figsize=(9, 7))
+    if score_col:
+        sc = ax.scatter(df[dist_col].values, df[mag_col].values, c=df[score_col].values, s=10)
+        fig.colorbar(sc, ax=ax, label=score_col)
     else:
-        plt.text(0.5, 0.5, "Missing phot_g_mean_mag or distance", ha="center", va="center")
-        plt.axis("off")
-    return fig
+        ax.scatter(df[dist_col].values, df[mag_col].values, s=10)
+
+    ax.set_title("Magnitude vs distance")
+    ax.set_xlabel(dist_col)
+    ax.set_ylabel(mag_col)
+    # In astronomy, smaller magnitude is brighter; invert y for intuition.
+    ax.invert_yaxis()
+    fig.tight_layout()
+    fig.savefig(out_dir / "mag_vs_distance.png", dpi=200)
+    plt.close(fig)
 
 
-def plot_cmd(df: pd.DataFrame):
-    fig = plt.figure(figsize=(10, 6))
-    if "bp_rp" in df.columns and "phot_g_mean_mag" in df.columns:
-        x = pd.to_numeric(df["bp_rp"], errors="coerce").fillna(0.0).to_numpy(float)
-        y = pd.to_numeric(df["phot_g_mean_mag"], errors="coerce").fillna(0.0).to_numpy(float)
-        plt.scatter(x, y, s=10, alpha=0.75)
-        plt.gca().invert_yaxis()
-        plt.title("Diagramme Couleur-Magnitude Gaia (BP-RP vs G)")
-        plt.xlabel("BP - RP Color [mag]")
-        plt.ylabel("G-band Magnitude [mag]")
-        plt.grid(alpha=0.25)
-    else:
-        plt.text(0.5, 0.5, "Missing bp_rp or phot_g_mean_mag", ha="center", va="center")
-        plt.axis("off")
-    return fig
-
-
-def enrich_from_graph(df: pd.DataFrame, graph_path: Path) -> Tuple[pd.DataFrame, dict]:
+def _compute_graph_enrichment(df: pd.DataFrame, graph_path: Path) -> pd.DataFrame:
     import networkx as nx
+    from networkx.algorithms import community as nx_comm
 
     G = nx.read_graphml(graph_path)
-    G = nx.relabel_nodes(G, {n: str(n) for n in G.nodes()})
 
-    n = G.number_of_nodes()
-    m = G.number_of_edges()
-
+    # Ensure node ids are comparable to source_id strings/ints
+    # GraphML loader returns node ids as strings.
+    node_ids = list(G.nodes())
+    # degree
     degree = dict(G.degree())
+    # clustering (small graph; OK)
     clustering = nx.clustering(G)
-    try:
-        kcore = nx.core_number(G)
-    except Exception:
-        kcore = {k: 0 for k in G.nodes()}
+    # k-core number
+    kcore = nx.core_number(G)
+    # betweenness
+    betweenness = nx.betweenness_centrality(G, normalized=True)
 
-    try:
-        k = min(200, max(10, int(0.03 * n)))
-        betw = nx.betweenness_centrality(G, k=k, seed=42, normalized=True)
-    except Exception:
-        betw = {k: 0.0 for k in G.nodes()}
+    # communities: deterministic order by (size desc, min node id)
+    comms = list(nx_comm.greedy_modularity_communities(G))
+    def _comm_key(cset):
+        mins = min(cset) if cset else ""
+        return (-len(cset), mins)
+    comms_sorted = sorted(comms, key=_comm_key)
 
-    try:
-        arts = list(nx.articulation_points(G))
-    except Exception:
-        arts = []
-    try:
-        bridges = [(str(a), str(b)) for a, b in nx.bridges(G)]
-    except Exception:
-        bridges = []
+    community_id: dict[str, int] = {}
+    for i, cset in enumerate(comms_sorted):
+        for n in cset:
+            community_id[str(n)] = i
 
-    comm_id: Dict[str, int] = {}
-    comm_sizes: List[int] = []
-    try:
-        from networkx.algorithms.community import louvain_communities
-        comms = louvain_communities(G, seed=42)
-        for i, cset in enumerate(comms):
-            for node in cset:
-                comm_id[str(node)] = i
-        comm_sizes = [len(c) for c in comms]
-    except Exception:
-        try:
-            from networkx.algorithms.community import greedy_modularity_communities
-            comms = greedy_modularity_communities(G)
-            for i, cset in enumerate(comms):
-                for node in cset:
-                    comm_id[str(node)] = i
-            comm_sizes = [len(c) for c in comms]
-        except Exception:
-            comm_id = {str(node): 0 for node in G.nodes()}
-            comm_sizes = [n]
-
+    # Map metrics onto df by source_id
+    sid = df["source_id"].astype(str)
     df2 = df.copy()
-    if "source_id" in df2.columns:
-        sid = df2["source_id"].astype(str)
-        df2["degree"] = sid.map(degree).fillna(0).astype(int)
-        df2["clustering"] = sid.map(clustering).fillna(0.0).astype(float)
-        df2["kcore"] = sid.map(kcore).fillna(0).astype(int)
-        df2["betweenness"] = sid.map(betw).fillna(0.0).astype(float)
-        df2["community_id"] = sid.map(comm_id).fillna(-1).astype(int)
 
-    metrics = {
-        "n_nodes": n,
-        "n_edges": m,
-        "n_components": int(nx.number_connected_components(G)) if n > 0 else 0,
-        "n_articulation_points": len(arts),
-        "n_bridges": len(bridges),
-        "articulation_points_sample": [str(x) for x in arts[:50]],
-        "bridges_sample": bridges[:50],
-        "n_communities": len(comm_sizes),
-        "community_sizes_top10": sorted(comm_sizes, reverse=True)[:10],
-    }
-    return df2, metrics
+    df2["anomaly_score_norm"] = _minmax01(df2[_pick(df2, ["anomaly_score", "score"])].values)
+
+    df2["degree"] = sid.map(lambda s: int(degree.get(s, 0)))
+    df2["clustering"] = sid.map(lambda s: float(clustering.get(s, 0.0)))
+    df2["kcore"] = sid.map(lambda s: int(kcore.get(s, 0)))
+    df2["betweenness"] = sid.map(lambda s: float(betweenness.get(s, 0.0)))
+    df2["community_id"] = sid.map(lambda s: int(community_id.get(s, -1)))
+
+    return df2
 
 
-def plot_graph_communities(df: pd.DataFrame, graph_path: Path):
+def plot_graph_communities(df_enriched: pd.DataFrame, graph_path: Path, out_dir: Path) -> None:
     import networkx as nx
 
-    fig = plt.figure(figsize=(11, 9))
-    if not graph_path.exists():
-        plt.text(0.5, 0.5, "Missing graph_full.graphml", ha="center", va="center")
-        plt.axis("off")
-        return fig
+    if not {"ra", "dec", "community_id"}.issubset(df_enriched.columns):
+        return
 
     G = nx.read_graphml(graph_path)
-    G = nx.relabel_nodes(G, {n: str(n) for n in G.nodes()})
 
+    # Positions: use RA/DEC when present; fallback to spring layout if missing.
     pos = {}
-    if "ra" in df.columns and "dec" in df.columns and "source_id" in df.columns:
-        tmp = df.set_index("source_id")
-        for n in G.nodes():
-            if n in tmp.index:
-                pos[n] = (float(tmp.loc[n, "ra"]), float(tmp.loc[n, "dec"]))
-    if len(pos) != G.number_of_nodes():
-        pos = nx.spring_layout(G, seed=42)
+    have_ra = True
+    for n, d in G.nodes(data=True):
+        if "ra" in d and "dec" in d:
+            pos[str(n)] = (float(d["ra"]), float(d["dec"]))
+        else:
+            have_ra = False
+            break
+    if not have_ra:
+        pos = nx.spring_layout(G, seed=0)
 
-    if "community_id" in df.columns and "source_id" in df.columns:
-        cmap = dict(zip(df["source_id"].astype(str).tolist(), df["community_id"].to_numpy(int)))
-        node_color = np.array([cmap.get(str(n), -1) for n in G.nodes()], dtype=float)
-    else:
-        node_color = np.zeros(G.number_of_nodes(), dtype=float)
+    # Prepare plotting data
+    sid = df_enriched["source_id"].astype(str).values
+    comm = df_enriched["community_id"].values
+    is_anom = (df_enriched.get("anomaly_label", 1).values == -1)
 
-    score_map = {}
-    if "source_id" in df.columns and "anomaly_score_norm" in df.columns:
-        score_map = dict(zip(df["source_id"].astype(str).tolist(), df["anomaly_score_norm"].to_numpy(float)))
-    sizes = [40 + 120*score_map.get(str(n), 0.2) for n in G.nodes()]
+    xs = np.array([pos.get(s, (np.nan, np.nan))[0] for s in sid], dtype=float)
+    ys = np.array([pos.get(s, (np.nan, np.nan))[1] for s in sid], dtype=float)
 
-    nx.draw(G, pos, node_size=sizes, with_labels=False, node_color=node_color, alpha=0.92, width=0.6)
-    plt.title("Graphe Anomalies par Communauté (k-NN)")
-    plt.colorbar(plt.cm.ScalarMappable(), label="Community ID")
-    return fig
+    fig, ax = plt.subplots(figsize=(11, 8))
+
+    # Draw edges lightly (avoid overdraw if RA/DEC space is used)
+    try:
+        for u, v in G.edges():
+            pu = pos.get(str(u))
+            pv = pos.get(str(v))
+            if pu is None or pv is None:
+                continue
+            ax.plot([pu[0], pv[0]], [pu[1], pv[1]], linewidth=0.3, alpha=0.08)
+    except Exception:
+        pass
+
+    # Nodes: color by community, enlarge anomalies
+    sizes = np.where(is_anom, 30.0, 10.0)
+
+    sc = ax.scatter(xs, ys, c=comm, s=sizes, cmap="tab20", alpha=0.95)
+
+    ax.set_title("Graph communities (nodes colored) + anomalies (larger)")
+    ax.set_xlabel("ra (deg)" if have_ra else "x")
+    ax.set_ylabel("dec (deg)" if have_ra else "y")
+
+    # Critical fix: always provide ax for colorbar (Matplotlib >= 3.9)
+    fig.colorbar(sc, ax=ax, label="Community ID")
+
+    fig.tight_layout()
+    fig.savefig(out_dir / "graph_communities_anomalies.png", dpi=200)
+    plt.close(fig)
 
 
-def parse_args():
+def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--scored", required=True, help="Path to scored.csv")
-    ap.add_argument("--graph", default="", help="Path to graph_full.graphml (optional)")
-    ap.add_argument("--out", required=True, help="Output directory for PNGs")
-    ap.add_argument("--top-k", type=int, default=30)
-    ap.add_argument("--write-enriched", action="store_true", help="Write scored_enriched.csv + graph_metrics.json")
-    return ap.parse_args()
+    ap.add_argument("--out", required=True, help="Directory to write plots into")
+    ap.add_argument("--top-k", type=int, default=30, help="Top-k for top anomalies plot")
+    ap.add_argument("--graph", default=None, help="Path to graph_full.graphml (optional)")
+    ap.add_argument("--write-enriched", action="store_true", help="Write scored_enriched.csv next to scored.csv")
+    args = ap.parse_args()
 
+    scored_path = Path(args.scored)
+    out_dir = Path(args.out)
 
-def main():
-    args = parse_args()
-    scored = Path(args.scored)
-    out = Path(args.out)
-    graph = Path(args.graph) if args.graph else None
+    _safe_mkdir(out_dir)
 
-    df = pd.read_csv(scored)
-    df = ensure_core_columns(df)
+    df = pd.read_csv(scored_path)
+    # Ensure anomaly_score_norm exists for some plots
+    score_col = _pick(df, ["anomaly_score", "score"])
+    if score_col and "anomaly_score_norm" not in df.columns:
+        df["anomaly_score_norm"] = _minmax01(df[score_col].values)
 
-    if graph is not None and graph.exists():
-        df, metrics = enrich_from_graph(df, graph)
-        if args.write_enriched:
-            (out.parent / "graph_metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
-            df.to_csv(out.parent / "scored_enriched.csv", index=False)
+    # Basic plots (always)
+    plot_score_hist(df, out_dir)
+    plot_ra_dec_score(df, out_dir)
+    plot_pca_2d(df, out_dir)
+    plot_mean_features(df, out_dir)
+    plot_top_anomalies(df, out_dir, top_k=args.top_k)
+    plot_mag_vs_distance(df, out_dir)
 
-    curated = [
-        ("score_hist.png", plot_score_hist(df)),
-        ("ra_dec_score.png", plot_ra_dec_score(df)),
-        ("top_anomalies_scores.png", plot_top_bar(df, top_k=args.top_k)),
-        ("mean_features_anom_vs_normal.png", plot_mean_features(df)),
-        ("pca_2d.png", plot_pca(df)),
-        ("mag_vs_distance.png", plot_mag_distance(df)),
-        ("cmd_bp_rp_vs_g.png", plot_cmd(df)),
-    ]
-    for name, fig in curated:
-        save(fig, out, name)
-
-    if graph is not None and graph.exists():
-        fig = plot_graph_communities(df, graph)
+    # Graph enrichment + plot
+    if args.graph:
+        graph_path = Path(args.graph)
+        if graph_path.exists():
+            df_enriched = _compute_graph_enrichment(df, graph_path)
+            if args.write_enriched:
+                enriched_path = scored_path.with_name("scored_enriched.csv")
+                df_enriched.to_csv(enriched_path, index=False)
+            # Graph plot uses enriched (community_id)
+            plot_graph_communities(df_enriched, graph_path, out_dir)
+        else:
+            # still write enriched (without graph metrics) if requested
+            if args.write_enriched:
+                enriched_path = scored_path.with_name("scored_enriched.csv")
+                df.to_csv(enriched_path, index=False)
     else:
-        fig = plt.figure(figsize=(11, 9))
-        plt.text(0.5, 0.5, "graph_full.graphml not provided", ha="center", va="center")
-        plt.axis("off")
-    save(fig, out, "graph_communities_anomalies.png")
+        if args.write_enriched:
+            enriched_path = scored_path.with_name("scored_enriched.csv")
+            df.to_csv(enriched_path, index=False)
 
-    print(f"OK: wrote curated plots -> {out}")
+    print(f"[full_plots_suite] wrote plots into: {out_dir}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
