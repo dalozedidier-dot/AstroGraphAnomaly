@@ -1,56 +1,78 @@
 from __future__ import annotations
-import os
+
 from pathlib import Path
-import matplotlib.pyplot as plt
+import math
 import networkx as nx
-import numpy as np
-import pandas as pd
+import matplotlib.pyplot as plt
 
-def save_basic_plots(out_dir: str, df_scored: pd.DataFrame, anomalies_col: str = "anomaly_label"):
-    plot_dir = Path(out_dir)/"plots"
+
+def save_graph_plot(out_dir: str | Path, G: nx.Graph, anomalies: set) -> None:
+    """
+    Plot du graphe en garantissant une position pour chaque nœud.
+    - utilise node["pos"] si présent
+    - sinon utilise (ra, dec) si présents
+    - sinon fallback spring_layout pour les nœuds manquants
+    - ajoute aussi les clés str(node) pour éviter mismatch int/str
+    """
+    out_dir = Path(out_dir)
+    plot_dir = out_dir / "plots"
     plot_dir.mkdir(parents=True, exist_ok=True)
 
-    # Score histogram
-    plt.figure(figsize=(8,5))
-    df_scored["anomaly_score"].hist(bins=60)
-    plt.title("Anomaly score distribution (higher = more anomalous)")
-    plt.xlabel("anomaly_score")
-    plt.ylabel("count")
-    plt.tight_layout()
-    plt.savefig(plot_dir/"score_hist.png", dpi=140)
-    plt.close()
+    pos: dict = {}
 
-    # Mag vs distance
-    if "phot_g_mean_mag" in df_scored.columns and "distance" in df_scored.columns:
-        plt.figure(figsize=(8,5))
-        is_anom = df_scored[anomalies_col].values == -1
-        plt.scatter(df_scored.loc[~is_anom, "distance"], df_scored.loc[~is_anom, "phot_g_mean_mag"], s=6, alpha=0.6)
-        plt.scatter(df_scored.loc[is_anom, "distance"], df_scored.loc[is_anom, "phot_g_mean_mag"], s=18, alpha=0.9)
-        plt.title("Magnitude vs distance (anomalies highlighted)")
-        plt.xlabel("distance (pc)")
-        plt.ylabel("phot_g_mean_mag")
-        plt.tight_layout()
-        plt.savefig(plot_dir/"mag_vs_distance.png", dpi=140)
-        plt.close()
+    def _is_finite(x) -> bool:
+        try:
+            return x is not None and not (isinstance(x, float) and (math.isnan(x) or math.isinf(x)))
+        except Exception:
+            return False
 
-def save_graph_plot(out_dir: str, G: nx.Graph, anomalies: set[int]):
-    plot_dir = Path(out_dir)/"plots"
-    plot_dir.mkdir(parents=True, exist_ok=True)
-    # Use sky positions if available
-    pos = {}
+    def _add_pos(k, xy):
+        # key direct
+        pos[k] = xy
+        # key str fallback (si graph nodes sont des strings)
+        try:
+            pos[str(k)] = xy
+        except Exception:
+            pass
+
+    # 1) Positions issues des attributs
     for n in G.nodes():
-        ra = G.nodes[n].get("ra")
-        dec = G.nodes[n].get("dec")
-        if ra is not None and dec is not None:
-            pos[n] = (ra, dec)
+        data = G.nodes[n]
 
-    if not pos:
-        pos = nx.spring_layout(G, seed=42)
+        # a) pos explicite
+        if "pos" in data:
+            p = data.get("pos")
+            if isinstance(p, (tuple, list)) and len(p) == 2 and _is_finite(p[0]) and _is_finite(p[1]):
+                _add_pos(n, (float(p[0]), float(p[1])))
+                continue
 
-    node_colors = ["red" if n in anomalies else "blue" for n in G.nodes()]
-    plt.figure(figsize=(10,8))
-    nx.draw(G, pos, node_color=node_colors, node_size=20, with_labels=False, alpha=0.8)
-    plt.title("Graph (anomalies in red)")
+        # b) ra/dec
+        ra = data.get("ra", None)
+        dec = data.get("dec", None)
+        if _is_finite(ra) and _is_finite(dec):
+            _add_pos(n, (float(ra), float(dec)))
+
+    # 2) Compléter les positions manquantes (fallback layout)
+    missing = [n for n in G.nodes() if n not in pos and str(n) not in pos]
+    if missing:
+        # layout pour tout le graphe, puis overwrite si positions existantes
+        spring = nx.spring_layout(G, seed=42)
+        for n in missing:
+            if n in spring:
+                _add_pos(n, spring[n])
+
+    # 3) Sécurité finale : si toujours incomplet -> spring_layout total
+    if any((n not in pos and str(n) not in pos) for n in G.nodes()):
+        spring = nx.spring_layout(G, seed=42)
+        pos = {}
+        for n, xy in spring.items():
+            _add_pos(n, xy)
+
+    node_colors = ["red" if (n in anomalies or str(n) in anomalies) else "blue" for n in G.nodes()]
+
+    plt.figure(figsize=(10, 8))
+    nx.draw(G, pos, node_color=node_colors, node_size=20, with_labels=False, alpha=0.85, width=0.4)
+    plt.title("Graph (anomalies en rouge)")
     plt.tight_layout()
-    plt.savefig(plot_dir/"graph_anomalies.png", dpi=140)
+    plt.savefig(plot_dir / "graph_anomalies.png", dpi=160)
     plt.close()
