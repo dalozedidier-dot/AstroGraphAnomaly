@@ -13,7 +13,7 @@ concurrency:
 jobs:
   full:
     runs-on: ubuntu-latest
-    timeout-minutes: 18
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -37,30 +37,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Prepare offline CSV (bp_rp)
-        run: |
-          python - <<'PY'
-          import pandas as pd
-          import numpy as np
-          from pathlib import Path
-          base = Path("data/sample_gaia_like.csv")
-          out = Path("data/sample_gaia_like_with_bp_rp.csv")
-          df = pd.read_csv(base)
-          if "bp_rp" not in df.columns:
-              rng = np.random.default_rng(42)
-              df["bp_rp"] = np.clip(rng.normal(1.5, 0.6, len(df)), -0.5, 4.5)
-          out.write_text(df.to_csv(index=False), encoding="utf-8")
-          print("Wrote", out)
-          PY
-
-      - name: Run workflow (offline, full outputs)
+      - name: Run pipeline + full plots (offline)
         run: |
           mkdir -p results/ci_full_py${{ matrix.python-version }}
-          if [ -f workflow.py ]; then
-            python workflow.py csv               --in-csv data/sample_gaia_like_with_bp_rp.csv               --out results/ci_full_py${{ matrix.python-version }}               --top-k 30 --knn-k 8               --plots --explain-top 5               --features-mode extended
-          else
-            python run_workflow.py               --mode csv               --in-csv data/sample_gaia_like_with_bp_rp.csv               --out results/ci_full_py${{ matrix.python-version }}               --top-k 30 --knn-k 8               --plots --explain-top 5               --features-mode extended
-          fi
+          python tools/run_full.py csv             --in-csv data/sample_gaia_like.csv             --out results/ci_full_py${{ matrix.python-version }}             --top-k 30 --knn-k 8 --engine isolation_forest
+
+      - name: Assert curated plots (>= 8 PNG)
+        run: |
+          test $(ls -1 results/ci_full_py${{ matrix.python-version }}/plots/*.png | wc -l) -ge 8
 
       - name: Upload artefacts
         if: always()
