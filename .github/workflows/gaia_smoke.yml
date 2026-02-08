@@ -1,63 +1,53 @@
-name: gaia-smoke
+name: gaia_smoke
 
 on:
   workflow_dispatch: {}
-  # Optionnel :
-  # schedule:
-  #   - cron: "0 6 * * 1"
+  schedule:
+    # quotidien (UTC) — réduit la pression par rapport à "push" sur chaque commit
+    - cron: "17 3 * * *"
+
+concurrency:
+  group: gaia-smoke-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   gaia:
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+    timeout-minutes: 12
 
-      - uses: actions/setup-python@v5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
+          # Astroquery + stack science : 3.11 est généralement plus stable que 3.12 en CI
           python-version: "3.11"
+          cache: "pip"
 
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Gaia run (small) — auto entrypoint
+      - name: Gaia smoke (robust)
+        env:
+          GAIA_SMOKE_RA: "266.4"
+          GAIA_SMOKE_DEC: "-29.0"
+          GAIA_SMOKE_RADIUS_DEG: "0.15"
+          GAIA_SMOKE_LIMIT: "30"
+          GAIA_SMOKE_MAX_ATTEMPTS: "4"
+          GAIA_SMOKE_BACKOFF_BASE_S: "2"
+          GAIA_SMOKE_OUT: "results/gaia_smoke"
+          # 1 = après fetch Gaia, exécuter le pipeline en mode csv (test end-to-end)
+          GAIA_SMOKE_RUN_PIPELINE: "1"
         run: |
-          python - <<'PY'
-          import os, subprocess, sys
-          out = "results/ci_gaia"
-          os.makedirs(out, exist_ok=True)
+          python tools/gaia_smoke_test.py
 
-          if os.path.exists("workflow.py"):
-              cmd = [sys.executable, "workflow.py", "gaia",
-                     "--ra", "266.4051",
-                     "--dec", "-28.936175",
-                     "--radius-deg", "0.2",
-                     "--limit", "300",
-                     "--out", out,
-                     "--plots",
-                     "--explain-top", "3",
-                     "--top-k", "20"]
-          elif os.path.exists("run_workflow.py"):
-              cmd = [sys.executable, "run_workflow.py",
-                     "--mode", "gaia",
-                     "--ra", "266.4051",
-                     "--dec", "-28.936175",
-                     "--radius-deg", "0.2",
-                     "--limit", "300",
-                     "--out", out,
-                     "--plots",
-                     "--explain-top", "3",
-                     "--top-k", "20"]
-          else:
-              raise SystemExit("ERROR: no workflow entrypoint found (workflow.py or run_workflow.py)")
-
-          print("Running:", " ".join(cmd))
-          subprocess.check_call(cmd)
-          PY
-
-      - name: Upload results
+      - name: Upload gaia_smoke artefacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: gaia-ci
-          path: results/ci_gaia
+          name: gaia_smoke_results
+          path: results/gaia_smoke
