@@ -14,6 +14,8 @@ This script is used by CI like:
 
 Outputs (into --out):
   - score_hist.png
+  - score_rank_curve.png
+  - score_ecdf.png
   - ra_dec_score.png
   - pca_2d.png
   - mean_features_anom_vs_normal.png
@@ -24,10 +26,9 @@ Outputs (into --out):
 If --write-enriched is set, writes:
   - <scored_dir>/scored_enriched.csv
 
-Hotfix included:
-  Matplotlib >= 3.9 requires an explicit Axes for colorbar() in some cases.
-  We always pass ax=... to avoid:
-    ValueError: Unable to determine Axes to steal space for Colorbar
+Matplotlib >= 3.9 requires an explicit Axes for colorbar() in some cases.
+We always pass ax=... to avoid:
+  ValueError: Unable to determine Axes to steal space for Colorbar
 """
 
 from __future__ import annotations
@@ -67,18 +68,62 @@ def _pick(df: pd.DataFrame, candidates: Iterable[str]) -> str | None:
     return None
 
 
+def _get_score_col(df: pd.DataFrame) -> str | None:
+    return _pick(df, ["anomaly_score", "score"])
+
+
 def plot_score_hist(df: pd.DataFrame, out_dir: Path) -> None:
-    col = _pick(df, ["anomaly_score", "score"])
+    col = _get_score_col(df)
     if not col:
         return
     plt.figure(figsize=(10, 6))
     plt.hist(df[col].values, bins=60)
     plt.title("Distribution of anomaly scores")
-    plt.xlabel("anomaly_score")
+    plt.xlabel(col)
     plt.ylabel("count")
     plt.tight_layout()
     plt.savefig(out_dir / "score_hist.png", dpi=200)
     plt.close()
+
+
+def plot_score_rank_curve(df: pd.DataFrame, out_dir: Path) -> None:
+    """Always-producible plot: score vs rank (descending)."""
+    col = _get_score_col(df)
+    if not col:
+        return
+    s = pd.to_numeric(df[col], errors="coerce").replace([np.inf, -np.inf], np.nan).dropna().values
+    if s.size == 0:
+        return
+    s = np.sort(s)[::-1]
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.plot(np.arange(1, s.size + 1), s)
+    ax.set_title("Anomaly score rank curve")
+    ax.set_xlabel("rank (1 = highest score)")
+    ax.set_ylabel(col)
+    fig.tight_layout()
+    fig.savefig(out_dir / "score_rank_curve.png", dpi=200)
+    plt.close(fig)
+
+
+def plot_score_ecdf(df: pd.DataFrame, out_dir: Path) -> None:
+    """Always-producible plot: empirical CDF of scores."""
+    col = _get_score_col(df)
+    if not col:
+        return
+    s = pd.to_numeric(df[col], errors="coerce").replace([np.inf, -np.inf], np.nan).dropna().values
+    if s.size == 0:
+        return
+    s = np.sort(s)
+    y = np.arange(1, s.size + 1) / float(s.size)
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.plot(s, y)
+    ax.set_title("Anomaly score ECDF")
+    ax.set_xlabel(col)
+    ax.set_ylabel("ECDF")  # 0..1
+    ax.set_ylim(0.0, 1.0)
+    fig.tight_layout()
+    fig.savefig(out_dir / "score_ecdf.png", dpi=200)
+    plt.close(fig)
 
 
 def plot_ra_dec_score(df: pd.DataFrame, out_dir: Path) -> None:
@@ -151,7 +196,6 @@ def plot_mean_features(df: pd.DataFrame, out_dir: Path) -> None:
         return
 
     means = df.groupby("anomaly_label")[keep].mean(numeric_only=True)
-    # Ensure stable order (-1 first, then 1) if present.
     means = means.reindex(sorted(means.index.tolist()))
 
     fig, ax = plt.subplots(figsize=(12, 6))
@@ -166,7 +210,7 @@ def plot_mean_features(df: pd.DataFrame, out_dir: Path) -> None:
 
 
 def plot_top_anomalies(df: pd.DataFrame, out_dir: Path, top_k: int) -> None:
-    score_col = _pick(df, ["anomaly_score", "score"])
+    score_col = _get_score_col(df)
     if not score_col:
         return
 
@@ -212,23 +256,18 @@ def _compute_graph_enrichment(df: pd.DataFrame, graph_path: Path) -> pd.DataFram
 
     G = nx.read_graphml(graph_path)
 
-    # Ensure node ids are comparable to source_id strings/ints
-    # GraphML loader returns node ids as strings.
-    node_ids = list(G.nodes())
-    # degree
     degree = dict(G.degree())
-    # clustering (small graph; OK)
     clustering = nx.clustering(G)
-    # k-core number
     kcore = nx.core_number(G)
-    # betweenness
     betweenness = nx.betweenness_centrality(G, normalized=True)
 
     # communities: deterministic order by (size desc, min node id)
     comms = list(nx_comm.greedy_modularity_communities(G))
-    def _comm_key(cset):
+
+    def _comm_key(cset) -> tuple[int, str]:
         mins = min(cset) if cset else ""
-        return (-len(cset), mins)
+        return (-len(cset), str(mins))
+
     comms_sorted = sorted(comms, key=_comm_key)
 
     community_id: dict[str, int] = {}
@@ -236,11 +275,12 @@ def _compute_graph_enrichment(df: pd.DataFrame, graph_path: Path) -> pd.DataFram
         for n in cset:
             community_id[str(n)] = i
 
-    # Map metrics onto df by source_id
     sid = df["source_id"].astype(str)
     df2 = df.copy()
 
-    df2["anomaly_score_norm"] = _minmax01(df2[_pick(df2, ["anomaly_score", "score"])].values)
+    score_col = _get_score_col(df2)
+    if score_col and "anomaly_score_norm" not in df2.columns:
+        df2["anomaly_score_norm"] = _minmax01(df2[score_col].values)
 
     df2["degree"] = sid.map(lambda s: int(degree.get(s, 0)))
     df2["clustering"] = sid.map(lambda s: float(clustering.get(s, 0.0)))
@@ -260,7 +300,7 @@ def plot_graph_communities(df_enriched: pd.DataFrame, graph_path: Path, out_dir:
     G = nx.read_graphml(graph_path)
 
     # Positions: use RA/DEC when present; fallback to spring layout if missing.
-    pos = {}
+    pos: dict[str, tuple[float, float]] = {}
     have_ra = True
     for n, d in G.nodes(data=True):
         if "ra" in d and "dec" in d:
@@ -271,7 +311,6 @@ def plot_graph_communities(df_enriched: pd.DataFrame, graph_path: Path, out_dir:
     if not have_ra:
         pos = nx.spring_layout(G, seed=0)
 
-    # Prepare plotting data
     sid = df_enriched["source_id"].astype(str).values
     comm = df_enriched["community_id"].values
     is_anom = (df_enriched.get("anomaly_label", 1).values == -1)
@@ -281,7 +320,7 @@ def plot_graph_communities(df_enriched: pd.DataFrame, graph_path: Path, out_dir:
 
     fig, ax = plt.subplots(figsize=(11, 8))
 
-    # Draw edges lightly (avoid overdraw if RA/DEC space is used)
+    # Draw edges lightly
     try:
         for u, v in G.edges():
             pu = pos.get(str(u))
@@ -292,9 +331,7 @@ def plot_graph_communities(df_enriched: pd.DataFrame, graph_path: Path, out_dir:
     except Exception:
         pass
 
-    # Nodes: color by community, enlarge anomalies
     sizes = np.where(is_anom, 30.0, 10.0)
-
     sc = ax.scatter(xs, ys, c=comm, s=sizes, cmap="tab20", alpha=0.95)
 
     ax.set_title("Graph communities (nodes colored) + anomalies (larger)")
@@ -324,13 +361,15 @@ def main() -> int:
     _safe_mkdir(out_dir)
 
     df = pd.read_csv(scored_path)
-    # Ensure anomaly_score_norm exists for some plots
-    score_col = _pick(df, ["anomaly_score", "score"])
+
+    score_col = _get_score_col(df)
     if score_col and "anomaly_score_norm" not in df.columns:
         df["anomaly_score_norm"] = _minmax01(df[score_col].values)
 
-    # Basic plots (always)
+    # Always-on plots
     plot_score_hist(df, out_dir)
+    plot_score_rank_curve(df, out_dir)
+    plot_score_ecdf(df, out_dir)
     plot_ra_dec_score(df, out_dir)
     plot_pca_2d(df, out_dir)
     plot_mean_features(df, out_dir)
@@ -345,10 +384,8 @@ def main() -> int:
             if args.write_enriched:
                 enriched_path = scored_path.with_name("scored_enriched.csv")
                 df_enriched.to_csv(enriched_path, index=False)
-            # Graph plot uses enriched (community_id)
             plot_graph_communities(df_enriched, graph_path, out_dir)
         else:
-            # still write enriched (without graph metrics) if requested
             if args.write_enriched:
                 enriched_path = scored_path.with_name("scored_enriched.csv")
                 df.to_csv(enriched_path, index=False)
