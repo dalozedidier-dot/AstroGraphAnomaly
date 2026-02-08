@@ -2,7 +2,7 @@ name: gaia-smoke
 
 on:
   workflow_dispatch: {}
-  # optionnel si tu veux un test hebdo :
+  # Optionnel :
   # schedule:
   #   - cron: "0 6 * * 1"
 
@@ -21,9 +21,40 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Gaia run (small)
+      - name: Gaia run (small) — auto entrypoint
         run: |
-          python workflow.py gaia --ra 266.4051 --dec -28.936175 --radius-deg 0.2 --limit 300 --out results/ci_gaia --plots --explain-top 3 --top-k 20
+          python - <<'PY'
+          import os, subprocess, sys
+          out = "results/ci_gaia"
+          os.makedirs(out, exist_ok=True)
+
+          if os.path.exists("workflow.py"):
+              cmd = [sys.executable, "workflow.py", "gaia",
+                     "--ra", "266.4051",
+                     "--dec", "-28.936175",
+                     "--radius-deg", "0.2",
+                     "--limit", "300",
+                     "--out", out,
+                     "--plots",
+                     "--explain-top", "3",
+                     "--top-k", "20"]
+          elif os.path.exists("run_workflow.py"):
+              cmd = [sys.executable, "run_workflow.py",
+                     "--mode", "gaia",
+                     "--ra", "266.4051",
+                     "--dec", "-28.936175",
+                     "--radius-deg", "0.2",
+                     "--limit", "300",
+                     "--out", out,
+                     "--plots",
+                     "--explain-top", "3",
+                     "--top-k", "20"]
+          else:
+              raise SystemExit("ERROR: no workflow entrypoint found (workflow.py or run_workflow.py)")
+
+          print("Running:", " ".join(cmd))
+          subprocess.check_call(cmd)
+          PY
 
       - name: Upload results
         uses: actions/upload-artifact@v4
