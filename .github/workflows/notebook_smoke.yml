@@ -32,12 +32,15 @@ jobs:
 
       - name: Execute notebook (smoke)
         run: |
-          # exécute et échoue si erreur
+          # NB: nbconvert écrit par défaut à côté du notebook d'entrée.
+          # Ici: notebooks/executed_colab_workflow.ipynb
           jupyter nbconvert --to notebook --execute --ExecutePreprocessor.timeout=1200             --output executed_colab_workflow.ipynb notebooks/colab_workflow.ipynb
+          ls -la notebooks | sed -n '1,200p'
 
       - name: Upload executed notebook
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: executed_notebook
-          path: executed_colab_workflow.ipynb
+          path: notebooks/executed_colab_workflow.ipynb
+          if-no-files-found: error
