@@ -20,10 +20,34 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run workflow (offline) + plots
+      - name: Run workflow (offline) + plots — auto entrypoint
         run: |
-          mkdir -p results/ci_plots
-          python workflow.py csv --in-csv data/sample_gaia_like.csv --out results/ci_plots --plots --explain-top 5 --top-k 20
+          python - <<'PY'
+          import os, subprocess, sys
+          out = "results/ci_plots"
+          os.makedirs(out, exist_ok=True)
+
+          if os.path.exists("workflow.py"):
+              cmd = [sys.executable, "workflow.py", "csv",
+                     "--in-csv", "data/sample_gaia_like.csv",
+                     "--out", out,
+                     "--plots",
+                     "--explain-top", "5",
+                     "--top-k", "20"]
+          elif os.path.exists("run_workflow.py"):
+              cmd = [sys.executable, "run_workflow.py",
+                     "--mode", "csv",
+                     "--in-csv", "data/sample_gaia_like.csv",
+                     "--out", out,
+                     "--plots",
+                     "--explain-top", "5",
+                     "--top-k", "20"]
+          else:
+              raise SystemExit("ERROR: no workflow entrypoint found (workflow.py or run_workflow.py)")
+
+          print("Running:", " ".join(cmd))
+          subprocess.check_call(cmd)
+          PY
 
       - name: Upload plots artifact
         uses: actions/upload-artifact@v4
