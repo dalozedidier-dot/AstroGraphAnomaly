@@ -1,21 +1,21 @@
-AstroGraphAnomaly patch bundle
-=============================
+Pretty plots patch
+=================
 
-Contenu (fichiers à remplacer/ajouter dans ton repo) :
+But:
+- Garder un set de plots pertinent + lisible + esthétique, exporté systématiquement dans results/.../plots.
 
-1) notebooks/colab_workflow.ipynb (REMPLACER)
-2) notebooks/colab_gaia_run.ipynb (AJOUTER)
-3) notebooks/colab_inspect_outputs.ipynb (AJOUTER)
+Fichier remplacé:
+- src/astrographanomaly/reporting/plots.py
 
-4) src/astrographanomaly/data/gaia.py (REMPLACER)
-   - Ajoute bp_rp dans la requête Gaia (utile pour CMD)
+Nouveaux PNG exportés (si colonnes présentes):
+- score_hist.png
+- ra_dec_score.png
+- mag_vs_distance.png
+- cmd_bp_rp_vs_g.png (si bp_rp)
+- mean_features_anom_vs_normal.png (si anomaly_label)
+- top_anomalies_scores.png
+- pca_2d.png
+- graph_communities_anomalies.png (remplace/complète le graph plot précédent)
 
-5) src/astrographanomaly/reporting/plots.py (REMPLACER)
-   - Ajoute cmd_bp_rp_vs_g.png si bp_rp disponible
-   - Rend save_graph_plot robuste (plus de crash "Node has no position")
-
-Procédure GitHub web :
-- Ouvrir chaque fichier cible → Edit → coller → Commit
-OU
-- Dézipper localement puis upload les fichiers aux mêmes chemins.
-
+Intégration:
+- aucune modification pipeline requise si le pipeline appelle déjà save_basic_plots() et save_graph_plot().
