@@ -1,0 +1,70 @@
+name: ci_full_artifacts
+
+on:
+  workflow_dispatch: {}
+  pull_request:
+  push:
+    branches: [ "main" ]
+
+concurrency:
+  group: ci-full-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  full:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    env:
+      MPLBACKEND: Agg
+      PYTHONHASHSEED: "0"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Prepare offline CSV (bp_rp)
+        run: |
+          python - <<'PY'
+          import pandas as pd
+          import numpy as np
+          from pathlib import Path
+          base = Path("data/sample_gaia_like.csv")
+          out = Path("data/sample_gaia_like_with_bp_rp.csv")
+          df = pd.read_csv(base)
+          if "bp_rp" not in df.columns:
+              rng = np.random.default_rng(42)
+              df["bp_rp"] = np.clip(rng.normal(1.5, 0.6, len(df)), -0.5, 4.5)
+          out.write_text(df.to_csv(index=False), encoding="utf-8")
+          print("Wrote", out)
+          PY
+
+      - name: Run workflow (offline, full outputs)
+        run: |
+          mkdir -p results/ci_full_py${{ matrix.python-version }}
+          if [ -f workflow.py ]; then
+            python workflow.py csv               --in-csv data/sample_gaia_like_with_bp_rp.csv               --out results/ci_full_py${{ matrix.python-version }}               --top-k 30 --knn-k 8               --plots --explain-top 5               --features-mode extended
+          else
+            python run_workflow.py               --mode csv               --in-csv data/sample_gaia_like_with_bp_rp.csv               --out results/ci_full_py${{ matrix.python-version }}               --top-k 30 --knn-k 8               --plots --explain-top 5               --features-mode extended
+          fi
+
+      - name: Upload artefacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci_full_py${{ matrix.python-version }}
+          path: results/ci_full_py${{ matrix.python-version }}

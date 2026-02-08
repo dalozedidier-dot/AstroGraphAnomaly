@@ -1,0 +1,29 @@
+name: Bug report
+description: Report a reproducible bug
+labels: ["bug"]
+body:
+  - type: textarea
+    id: command
+    attributes:
+      label: Command
+      description: Exact CLI / notebook cell used
+      placeholder: "python workflow.py csv ..."
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual / logs (last 20 lines)
+    validations:
+      required: true
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: Python version, OS, and relevant package versions
