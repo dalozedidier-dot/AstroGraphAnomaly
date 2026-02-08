@@ -12,6 +12,7 @@ jobs:
       fail-fast: false
       matrix:
         python: ["3.10", "3.11", "3.12"]
+
     steps:
       - uses: actions/checkout@v4
 
@@ -24,6 +25,26 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Smoke test (offline)
+      - name: Smoke test (offline) — auto entrypoint
         run: |
-          python workflow.py csv --in-csv data/sample_gaia_like.csv --out results/ci_matrix_${{ matrix.python }} --top-k 10
+          python - <<'PY'
+          import os, subprocess, sys
+          os.makedirs("results/ci_matrix", exist_ok=True)
+
+          if os.path.exists("workflow.py"):
+              cmd = [sys.executable, "workflow.py", "csv",
+                     "--in-csv", "data/sample_gaia_like.csv",
+                     "--out", f"results/ci_matrix/{sys.version_info.major}.{sys.version_info.minor}",
+                     "--top-k", "10"]
+          elif os.path.exists("run_workflow.py"):
+              cmd = [sys.executable, "run_workflow.py",
+                     "--mode", "csv",
+                     "--in-csv", "data/sample_gaia_like.csv",
+                     "--out", f"results/ci_matrix/{sys.version_info.major}.{sys.version_info.minor}",
+                     "--top-k", "10"]
+          else:
+              raise SystemExit("ERROR: no workflow entrypoint found (workflow.py or run_workflow.py)")
+
+          print("Running:", " ".join(cmd))
+          subprocess.check_call(cmd)
+          PY
