@@ -532,8 +532,22 @@ def export_proper_motion_trails(df: pd.DataFrame, out_gif: Path, top_k: int = 30
         ax.set_ylabel("Dec [deg]")
         ax.grid(alpha=0.15)
         fig.canvas.draw()
-        img = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
-        img = img.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+        w, h = fig.canvas.get_width_height()
+
+        # Matplotlib >= 3.8: FigureCanvasAgg no longer exposes tostring_rgb().
+        # Use buffer_rgba() and drop alpha, with fallbacks for older versions.
+        try:
+            buf = np.frombuffer(fig.canvas.buffer_rgba(), dtype=np.uint8)
+            img = buf.reshape((h, w, 4))[:, :, :3].copy()
+        except Exception:
+            try:
+                buf = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
+                img = buf.reshape((h, w, 3))
+            except Exception:
+                buf = np.frombuffer(fig.canvas.tostring_argb(), dtype=np.uint8)
+                argb = buf.reshape((h, w, 4))
+                img = argb[:, :, 1:4].copy()
+
         imgs.append(img)
         plt.close(fig)
 
