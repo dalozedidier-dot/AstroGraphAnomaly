@@ -1,0 +1,272 @@
+name: manual_real_data_showcase
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_name:
+        description: "Nom du run (dossier results/<run_name>)"
+        required: true
+        default: "gaia_real"
+      python_version:
+        description: "Version Python"
+        required: true
+        default: "3.12"
+
+      ra0:
+        description: "Centre RA (deg)"
+        required: true
+        default: "266.4051"
+      dec0:
+        description: "Centre Dec (deg)"
+        required: true
+        default: "-28.936175"
+      radius_deg:
+        description: "Rayon du cone (deg)"
+        required: true
+        default: "0.5"
+      limit:
+        description: "Nombre max de lignes"
+        required: true
+        default: "2000"
+
+      knn_k:
+        description: "k du graphe kNN"
+        required: true
+        default: "8"
+      engine:
+        description: "Moteur (isolation_forest, lof, ocsvm, robust_zscore, pineforest)"
+        required: true
+        default: "isolation_forest"
+      threshold_strategy:
+        description: "Strategie seuil (contamination, percentile, top_k, score)"
+        required: true
+        default: "contamination"
+      contamination:
+        description: "Contamination si strategie contamination"
+        required: true
+        default: "0.05"
+      top_k:
+        description: "Top K anomalies exportees"
+        required: true
+        default: "30"
+      explain_top:
+        description: "Nombre d'anomalies expliquees"
+        required: true
+        default: "5"
+      seed:
+        description: "Seed"
+        required: true
+        default: "42"
+
+      plots:
+        description: "Produire les PNG (true/false)"
+        required: true
+        default: "true"
+      generate_viz:
+        description: "Generer Viz A a H (HTML 3D) (true/false)"
+        required: true
+        default: "true"
+
+      fallback_to_sample:
+        description: "Si Gaia TAP indisponible, fallback sur data/sample_gaia_like.csv (true/false)"
+        required: true
+        default: "true"
+
+permissions:
+  contents: read
+
+jobs:
+  real_data_run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python_version }}
+          cache: pip
+
+      - name: Install deps
+        run: |
+          set -euo pipefail
+          python -V
+          python -m pip install --upgrade pip
+
+          if [ -f requirements.txt ]; then
+            python -m pip install -r requirements.txt
+          fi
+          if [ -f requirements_viz.txt ]; then
+            python -m pip install -r requirements_viz.txt
+          fi
+          if [ -f pyproject.toml ]; then
+            python -m pip install -e .
+          fi
+
+      - name: Fetch real Gaia DR3 sample (CSV)
+        env:
+          RA0: ${{ inputs.ra0 }}
+          DEC0: ${{ inputs.dec0 }}
+          RADIUS_DEG: ${{ inputs.radius_deg }}
+          LIMIT: ${{ inputs.limit }}
+          FALLBACK: ${{ inputs.fallback_to_sample }}
+        run: |
+          set -euo pipefail
+          mkdir -p data
+
+          python - <<'PY'
+          import os
+          import shutil
+          import urllib.parse
+          import urllib.request
+
+          ra0 = float(os.environ["RA0"])
+          dec0 = float(os.environ["DEC0"])
+          radius = float(os.environ["RADIUS_DEG"])
+          limit = int(os.environ["LIMIT"])
+          fallback = os.environ.get("FALLBACK", "true").lower() == "true"
+
+          out_csv = "data/gaia_real_sample.csv"
+          endpoint = "https://gea.esac.esa.int/tap-server/tap/sync"
+
+          query = f"""
+          SELECT TOP {limit}
+            source_id,
+            ra, dec,
+            parallax, parallax_error,
+            pmra, pmdec,
+            phot_g_mean_mag,
+            bp_rp,
+            ruwe
+          FROM gaiadr3.gaia_source
+          WHERE 1 = CONTAINS(
+            POINT('ICRS', ra, dec),
+            CIRCLE('ICRS', {ra0}, {dec0}, {radius})
+          )
+          AND ruwe < 1.4
+          AND parallax IS NOT NULL
+          AND pmra IS NOT NULL
+          AND pmdec IS NOT NULL
+          AND phot_g_mean_mag IS NOT NULL
+          """
+
+          data = urllib.parse.urlencode(
+            {
+              "REQUEST": "doQuery",
+              "LANG": "ADQL",
+              "FORMAT": "csv",
+              "QUERY": query,
+            }
+          ).encode("utf-8")
+
+          try:
+              req = urllib.request.Request(endpoint, data=data, method="POST")
+              with urllib.request.urlopen(req, timeout=60) as r:
+                  content = r.read()
+
+              if len(content) < 200:
+                  raise RuntimeError("Reponse trop courte, possible erreur TAP")
+
+              with open(out_csv, "wb") as f:
+                  f.write(content)
+
+              print(f"OK: echantillon Gaia ecrit dans {out_csv}, taille={len(content)} bytes")
+          except Exception as e:
+              print(f"ERROR: echec requete Gaia TAP: {e}")
+
+              if not fallback:
+                  raise
+
+              sample = "data/sample_gaia_like.csv"
+              if not os.path.exists(sample):
+                  raise RuntimeError("Fallback demande mais data/sample_gaia_like.csv absent")
+
+              shutil.copy2(sample, out_csv)
+              print(f"FALLBACK: copie de {sample} vers {out_csv}")
+          PY
+
+          echo "Head of CSV:"
+          head -n 3 data/gaia_real_sample.csv || true
+
+      - name: Run core pipeline on real data
+        env:
+          RUN_NAME: ${{ inputs.run_name }}
+          KNN_K: ${{ inputs.knn_k }}
+          ENGINE: ${{ inputs.engine }}
+          THRESHOLD_STRATEGY: ${{ inputs.threshold_strategy }}
+          CONTAMINATION: ${{ inputs.contamination }}
+          TOP_K: ${{ inputs.top_k }}
+          EXPLAIN_TOP: ${{ inputs.explain_top }}
+          SEED: ${{ inputs.seed }}
+          PLOTS: ${{ inputs.plots }}
+        run: |
+          set -euo pipefail
+          test -f run_workflow.py || (echo "run_workflow.py introuvable a la racine" && exit 1)
+
+          OUT_DIR="results/${RUN_NAME}"
+          mkdir -p "${OUT_DIR}"
+
+          PLOT_ARG=""
+          if [ "${PLOTS}" = "true" ]; then
+            PLOT_ARG="--plots"
+          fi
+
+          ARGS=( --mode csv --in-csv "data/gaia_real_sample.csv" --out "${OUT_DIR}" )
+          ARGS+=( --knn-k "${KNN_K}" --engine "${ENGINE}" --threshold-strategy "${THRESHOLD_STRATEGY}" )
+          ARGS+=( --top-k "${TOP_K}" --explain-top "${EXPLAIN_TOP}" --seed "${SEED}" )
+
+          if [ "${THRESHOLD_STRATEGY}" = "contamination" ]; then
+            ARGS+=( --contamination "${CONTAMINATION}" )
+          fi
+
+          if [ "${PLOTS}" = "true" ]; then
+            ARGS+=( --plots )
+          fi
+
+          echo "Command:"
+          printf "python run_workflow.py"; printf " %q" "${ARGS[@]}"; echo
+
+          python run_workflow.py "${ARGS[@]}"
+
+          echo "Run outputs:"
+          ls -la "${OUT_DIR}" || true
+
+      - name: Viz A to H (HTML 3D, offline if your viz script inlines Plotly.js)
+        if: ${{ inputs.generate_viz == 'true' }}
+        env:
+          RUN_NAME: ${{ inputs.run_name }}
+        run: |
+          set -euo pipefail
+          test -f tools/viz_a_to_h_suite.py || (echo "tools/viz_a_to_h_suite.py absent" && exit 1)
+
+          RUN_DIR="results/${RUN_NAME}"
+          test -f "${RUN_DIR}/scored.csv" || (echo "scored.csv absent dans ${RUN_DIR}" && exit 1)
+
+          VARGS=( --run-dir "${RUN_DIR}" --scored "${RUN_DIR}/scored.csv" )
+
+          if [ -f "${RUN_DIR}/graph_full.graphml" ]; then
+            VARGS+=( --graph "${RUN_DIR}/graph_full.graphml" )
+          fi
+          if [ -f "${RUN_DIR}/explanations.jsonl" ]; then
+            VARGS+=( --explain "${RUN_DIR}/explanations.jsonl" )
+          fi
+
+          echo "Command:"
+          printf "python tools/viz_a_to_h_suite.py"; printf " %q" "${VARGS[@]}"; echo
+
+          python tools/viz_a_to_h_suite.py "${VARGS[@]}"
+
+          echo "Viz outputs:"
+          find "${RUN_DIR}" -maxdepth 6 -type f \( -name "*.png" -o -name "*.html" -o -name "*.gif" \) | sort || true
+
+      - name: Upload artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: astrographanomaly_real_${{ inputs.run_name }}_${{ github.run_id }}
+          path: results/${{ inputs.run_name }}
+          if-no-files-found: error
+          retention-days: 14
