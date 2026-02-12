@@ -1,0 +1,244 @@
+name: real_variability
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_name:
+        description: "Nom du run (results/<run_name>)"
+        required: true
+        default: "gaia_variability"
+      python_version:
+        description: "Python"
+        required: true
+        default: "3.12"
+
+      limit:
+        description: "Nombre max lignes"
+        required: true
+        default: "2000"
+      mag_min:
+        description: "G mag min"
+        required: true
+        default: "10"
+      mag_max:
+        description: "G mag max"
+        required: true
+        default: "19"
+      min_obs_g:
+        description: "min num_selected_g_fov"
+        required: true
+        default: "20"
+      min_range_g:
+        description: "min range_mag_g_fov"
+        required: true
+        default: "0.30"
+      only_agn:
+        description: "ne garder que in_vari_agn (true/false)"
+        required: true
+        default: "false"
+
+      knn_k:
+        description: "k kNN"
+        required: true
+        default: "8"
+      engine:
+        description: "engine"
+        required: true
+        default: "isolation_forest"
+      threshold_strategy:
+        description: "threshold_strategy"
+        required: true
+        default: "contamination"
+      contamination:
+        description: "contamination"
+        required: true
+        default: "0.05"
+      top_k:
+        description: "top_k"
+        required: true
+        default: "30"
+      explain_top:
+        description: "explain_top"
+        required: true
+        default: "5"
+      seed:
+        description: "seed"
+        required: true
+        default: "42"
+
+      plots:
+        description: "plots true/false"
+        required: true
+        default: "true"
+      generate_viz:
+        description: "viz A a H true/false"
+        required: true
+        default: "true"
+      fallback_to_sample:
+        description: "fallback sample si TAP down"
+        required: true
+        default: "true"
+
+permissions:
+  contents: read
+
+jobs:
+  run_real_variability:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python_version }}
+          cache: pip
+
+      - name: Install deps
+        run: |
+          set -euo pipefail
+          python -V
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then python -m pip install -r requirements.txt; fi
+          if [ -f requirements_viz.txt ]; then python -m pip install -r requirements_viz.txt; fi
+          if [ -f pyproject.toml ]; then python -m pip install -e .; fi
+
+      - name: Fetch Gaia DR3 vari_summary join gaia_source (CSV)
+        env:
+          LIMIT: ${{ inputs.limit }}
+          MAG_MIN: ${{ inputs.mag_min }}
+          MAG_MAX: ${{ inputs.mag_max }}
+          MIN_OBS_G: ${{ inputs.min_obs_g }}
+          MIN_RANGE_G: ${{ inputs.min_range_g }}
+          ONLY_AGN: ${{ inputs.only_agn }}
+          FALLBACK: ${{ inputs.fallback_to_sample }}
+        run: |
+          set -euo pipefail
+          mkdir -p data
+          python - <<'PY'
+          import os, shutil, urllib.parse, urllib.request
+
+          limit = int(os.environ["LIMIT"])
+          mag_min = float(os.environ["MAG_MIN"])
+          mag_max = float(os.environ["MAG_MAX"])
+          min_obs = int(os.environ["MIN_OBS_G"])
+          min_range = float(os.environ["MIN_RANGE_G"])
+          only_agn = os.environ.get("ONLY_AGN","false").lower() == "true"
+          fallback = os.environ.get("FALLBACK","true").lower() == "true"
+
+          out_csv = "data/gaia_variability.csv"
+          endpoint = "https://gea.esac.esa.int/tap-server/tap/sync"
+
+          extra = "AND vs.in_vari_agn = 'true'" if only_agn else ""
+
+          query = f"""
+          SELECT TOP {limit}
+            CAST(gs.source_id AS VARCHAR) AS source_id,
+            gs.ra, gs.dec,
+            gs.parallax, gs.pmra, gs.pmdec,
+            gs.phot_g_mean_mag, gs.bp_rp, gs.ruwe,
+
+            vs.num_selected_g_fov,
+            vs.mean_mag_g_fov,
+            vs.range_mag_g_fov,
+            vs.std_dev_mag_g_fov,
+            vs.mad_mag_g_fov,
+            vs.abbe_mag_g_fov,
+            vs.iqr_mag_g_fov,
+            vs.stetson_mag_g_fov,
+            vs.std_dev_over_rms_err_mag_g_fov,
+
+            vs.in_vari_classification_result,
+            vs.in_vari_eclipsing_binary,
+            vs.in_vari_rotation_modulation,
+            vs.in_vari_long_period_variable,
+            vs.in_vari_rrlyrae,
+            vs.in_vari_cepheid,
+            vs.in_vari_agn,
+            vs.in_vari_compact_companion
+          FROM gaiadr3.vari_summary AS vs
+          JOIN gaiadr3.gaia_source AS gs
+          USING (source_id)
+          WHERE gs.ruwe < 1.4
+            AND gs.phot_g_mean_mag BETWEEN {mag_min} AND {mag_max}
+            AND gs.parallax IS NOT NULL
+            AND gs.pmra IS NOT NULL
+            AND gs.pmdec IS NOT NULL
+            AND vs.num_selected_g_fov >= {min_obs}
+            AND vs.range_mag_g_fov >= {min_range}
+            {extra}
+          """
+
+          data = urllib.parse.urlencode({
+            "REQUEST":"doQuery","LANG":"ADQL","FORMAT":"csv","QUERY":query
+          }).encode("utf-8")
+
+          try:
+              req = urllib.request.Request(endpoint, data=data, method="POST")
+              with urllib.request.urlopen(req, timeout=90) as r:
+                  content = r.read()
+              if len(content) < 200:
+                  raise RuntimeError("Reponse trop courte")
+              open(out_csv,"wb").write(content)
+              print("OK wrote", out_csv, "bytes", len(content))
+          except Exception as e:
+              print("ERROR TAP:", e)
+              if not fallback:
+                  raise
+              sample = "data/sample_gaia_like.csv"
+              if not os.path.exists(sample):
+                  raise RuntimeError("Fallback sample absent")
+              shutil.copy2(sample, out_csv)
+              print("FALLBACK ->", out_csv)
+          PY
+          head -n 3 data/gaia_variability.csv || true
+
+      - name: Run pipeline
+        env:
+          RUN_NAME: ${{ inputs.run_name }}
+          KNN_K: ${{ inputs.knn_k }}
+          ENGINE: ${{ inputs.engine }}
+          THRESHOLD_STRATEGY: ${{ inputs.threshold_strategy }}
+          CONTAMINATION: ${{ inputs.contamination }}
+          TOP_K: ${{ inputs.top_k }}
+          EXPLAIN_TOP: ${{ inputs.explain_top }}
+          SEED: ${{ inputs.seed }}
+          PLOTS: ${{ inputs.plots }}
+        run: |
+          set -euo pipefail
+          OUT_DIR="results/${RUN_NAME}"
+          mkdir -p "${OUT_DIR}"
+          cp data/gaia_variability.csv "${OUT_DIR}/input_gaia.csv" || true
+
+          ARGS=( --mode csv --in-csv "data/gaia_variability.csv" --out "${OUT_DIR}" )
+          ARGS+=( --knn-k "${KNN_K}" --engine "${ENGINE}" --threshold-strategy "${THRESHOLD_STRATEGY}" )
+          ARGS+=( --top-k "${TOP_K}" --explain-top "${EXPLAIN_TOP}" --seed "${SEED}" )
+
+          if [ "${THRESHOLD_STRATEGY}" = "contamination" ]; then ARGS+=( --contamination "${CONTAMINATION}" ); fi
+          if [ "${PLOTS}" = "true" ]; then ARGS+=( --plots ); fi
+
+          python run_workflow.py "${ARGS[@]}"
+
+      - name: Viz A a H
+        if: ${{ inputs.generate_viz == 'true' }}
+        env:
+          RUN_NAME: ${{ inputs.run_name }}
+        run: |
+          set -euo pipefail
+          RUN_DIR="results/${RUN_NAME}"
+          VARGS=( --run-dir "${RUN_DIR}" --scored "${RUN_DIR}/scored.csv" )
+          if [ -f "${RUN_DIR}/graph_full.graphml" ]; then VARGS+=( --graph "${RUN_DIR}/graph_full.graphml" ); fi
+          if [ -f "${RUN_DIR}/explanations.jsonl" ]; then VARGS+=( --explain "${RUN_DIR}/explanations.jsonl" ); fi
+          python tools/viz_a_to_h_suite.py "${VARGS[@]}"
+
+      - name: Upload artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real_variability_${{ inputs.run_name }}_${{ github.run_id }}
+          path: results/${{ inputs.run_name }}
+          if-no-files-found: error
+          retention-days: 14

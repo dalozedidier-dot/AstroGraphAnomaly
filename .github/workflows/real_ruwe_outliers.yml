@@ -1,0 +1,190 @@
+name: real_ruwe_outliers
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_name:
+        required: true
+        default: "gaia_ruwe_outliers"
+      python_version:
+        required: true
+        default: "3.12"
+
+      limit:
+        required: true
+        default: "2000"
+      ruwe_min:
+        description: "RUWE min"
+        required: true
+        default: "2.0"
+      mag_min:
+        required: true
+        default: "10"
+      mag_max:
+        required: true
+        default: "19"
+
+      knn_k:
+        required: true
+        default: "8"
+      engine:
+        required: true
+        default: "isolation_forest"
+      threshold_strategy:
+        required: true
+        default: "contamination"
+      contamination:
+        required: true
+        default: "0.05"
+      top_k:
+        required: true
+        default: "30"
+      explain_top:
+        required: true
+        default: "5"
+      seed:
+        required: true
+        default: "42"
+
+      plots:
+        required: true
+        default: "true"
+      generate_viz:
+        required: true
+        default: "true"
+      fallback_to_sample:
+        required: true
+        default: "true"
+
+permissions:
+  contents: read
+
+jobs:
+  run_real_ruwe_outliers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python_version }}
+          cache: pip
+
+      - name: Install deps
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then python -m pip install -r requirements.txt; fi
+          if [ -f requirements_viz.txt ]; then python -m pip install -r requirements_viz.txt; fi
+          if [ -f pyproject.toml ]; then python -m pip install -e .; fi
+
+      - name: Fetch RUWE outliers from gaia_source (CSV)
+        env:
+          LIMIT: ${{ inputs.limit }}
+          RUWE_MIN: ${{ inputs.ruwe_min }}
+          MAG_MIN: ${{ inputs.mag_min }}
+          MAG_MAX: ${{ inputs.mag_max }}
+          FALLBACK: ${{ inputs.fallback_to_sample }}
+        run: |
+          set -euo pipefail
+          mkdir -p data
+          python - <<'PY'
+          import os, shutil, urllib.parse, urllib.request
+
+          limit = int(os.environ["LIMIT"])
+          ruwe_min = float(os.environ["RUWE_MIN"])
+          mag_min = float(os.environ["MAG_MIN"])
+          mag_max = float(os.environ["MAG_MAX"])
+          fallback = os.environ.get("FALLBACK","true").lower() == "true"
+
+          out_csv = "data/gaia_ruwe_outliers.csv"
+          endpoint = "https://gea.esac.esa.int/tap-server/tap/sync"
+
+          query = f"""
+          SELECT TOP {limit}
+            CAST(source_id AS VARCHAR) AS source_id,
+            ra, dec,
+            parallax, pmra, pmdec,
+            phot_g_mean_mag, bp_rp, ruwe
+          FROM gaiadr3.gaia_source
+          WHERE ruwe >= {ruwe_min}
+            AND phot_g_mean_mag BETWEEN {mag_min} AND {mag_max}
+            AND parallax IS NOT NULL
+            AND pmra IS NOT NULL
+            AND pmdec IS NOT NULL
+          """
+
+          data = urllib.parse.urlencode({
+            "REQUEST":"doQuery","LANG":"ADQL","FORMAT":"csv","QUERY":query
+          }).encode("utf-8")
+
+          try:
+              req = urllib.request.Request(endpoint, data=data, method="POST")
+              with urllib.request.urlopen(req, timeout=90) as r:
+                  content = r.read()
+              if len(content) < 200:
+                  raise RuntimeError("Reponse trop courte")
+              open(out_csv,"wb").write(content)
+              print("OK wrote", out_csv, "bytes", len(content))
+          except Exception as e:
+              print("ERROR TAP:", e)
+              if not fallback:
+                  raise
+              sample = "data/sample_gaia_like.csv"
+              if not os.path.exists(sample):
+                  raise RuntimeError("Fallback sample absent")
+              shutil.copy2(sample, out_csv)
+              print("FALLBACK ->", out_csv)
+          PY
+          head -n 3 data/gaia_ruwe_outliers.csv || true
+
+      - name: Run pipeline
+        env:
+          RUN_NAME: ${{ inputs.run_name }}
+          KNN_K: ${{ inputs.knn_k }}
+          ENGINE: ${{ inputs.engine }}
+          THRESHOLD_STRATEGY: ${{ inputs.threshold_strategy }}
+          CONTAMINATION: ${{ inputs.contamination }}
+          TOP_K: ${{ inputs.top_k }}
+          EXPLAIN_TOP: ${{ inputs.explain_top }}
+          SEED: ${{ inputs.seed }}
+          PLOTS: ${{ inputs.plots }}
+        run: |
+          set -euo pipefail
+          OUT_DIR="results/${RUN_NAME}"
+          mkdir -p "${OUT_DIR}"
+          cp data/gaia_ruwe_outliers.csv "${OUT_DIR}/input_gaia.csv" || true
+
+          ARGS=( --mode csv --in-csv "data/gaia_ruwe_outliers.csv" --out "${OUT_DIR}" )
+          ARGS+=( --knn-k "${KNN_K}" --engine "${ENGINE}" --threshold-strategy "${THRESHOLD_STRATEGY}" )
+          ARGS+=( --top-k "${TOP_K}" --explain-top "${EXPLAIN_TOP}" --seed "${SEED}" )
+
+          if [ "${THRESHOLD_STRATEGY}" = "contamination" ]; then ARGS+=( --contamination "${CONTAMINATION}" ); fi
+          if [ "${PLOTS}" = "true" ]; then ARGS+=( --plots ); fi
+
+          python run_workflow.py "${ARGS[@]}"
+
+      - name: Viz A a H
+        if: ${{ inputs.generate_viz == 'true' }}
+        env:
+          RUN_NAME: ${{ inputs.run_name }}
+        run: |
+          set -euo pipefail
+          RUN_DIR="results/${RUN_NAME}"
+          VARGS=( --run-dir "${RUN_DIR}" --scored "${RUN_DIR}/scored.csv" )
+          if [ -f "${RUN_DIR}/graph_full.graphml" ]; then VARGS+=( --graph "${RUN_DIR}/graph_full.graphml" ); fi
+          if [ -f "${RUN_DIR}/explanations.jsonl" ]; then VARGS+=( --explain "${RUN_DIR}/explanations.jsonl" ); fi
+          python tools/viz_a_to_h_suite.py "${VARGS[@]}"
+
+      - name: Upload artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real_ruwe_outliers_${{ inputs.run_name }}_${{ github.run_id }}
+          path: results/${{ inputs.run_name }}
+          if-no-files-found: error
+          retention-days: 14
