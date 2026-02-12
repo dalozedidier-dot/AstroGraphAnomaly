@@ -28,6 +28,7 @@ on:
         description: "Dec en degres (mode gaia)"
         required: false
         default: "-28.936175"
+
       radius_deg:
         description: "Rayon en degres"
         required: true
@@ -37,22 +38,43 @@ on:
         required: true
         default: "2000"
 
+      engine:
+        description: "Moteur (isolation_forest, lof, ocsvm, robust_zscore, pineforest)"
+        required: true
+        default: "isolation_forest"
+      threshold_strategy:
+        description: "Strategie seuil (contamination, percentile, top_k, score)"
+        required: true
+        default: "contamination"
+      contamination:
+        description: "Contamination (si strategie contamination)"
+        required: true
+        default: "0.05"
+      percentile:
+        description: "Percentile (si strategie percentile)"
+        required: true
+        default: "95"
+      score_threshold:
+        description: "Score threshold (si strategie score)"
+        required: true
+        default: "0.0"
+
       knn_k:
         description: "k du graphe kNN"
         required: true
         default: "8"
-      contamination:
-        description: "Contamination IsolationForest"
+      features_mode:
+        description: "Features (basic ou extended)"
         required: true
-        default: "0.05"
+        default: "extended"
       top_k:
         description: "Top K anomalies"
         required: true
         default: "30"
       explain_top:
-        description: "Nombre d'anomalies expliquees (0 pour desactiver)"
+        description: "Nombre d'anomalies expliquees"
         required: true
-        default: "10"
+        default: "5"
       seed:
         description: "Seed"
         required: true
@@ -90,9 +112,14 @@ jobs:
           set -euo pipefail
           python -V
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
+          if [ -f requirements.txt ]; then
+            python -m pip install -r requirements.txt
+          fi
           if [ -f requirements_viz.txt ]; then
             python -m pip install -r requirements_viz.txt
+          fi
+          if [ -f pyproject.toml ]; then
+            python -m pip install -e .
           fi
 
       - name: Sanity check required files
@@ -102,8 +129,9 @@ jobs:
           if [ "${{ inputs.generate_viz }}" = "true" ]; then
             test -f tools/viz_a_to_h_suite.py || (echo "tools/viz_a_to_h_suite.py absent" && exit 1)
           fi
+          python run_workflow.py --help | sed -n '1,120p' || true
 
-      - name: Run core workflow
+      - name: Run core (run_workflow.py)
         env:
           RUN_NAME: ${{ inputs.run_name }}
           MODE: ${{ inputs.mode }}
@@ -112,8 +140,13 @@ jobs:
           DEC: ${{ inputs.dec }}
           RADIUS_DEG: ${{ inputs.radius_deg }}
           LIMIT: ${{ inputs.limit }}
-          KNN_K: ${{ inputs.knn_k }}
+          ENGINE: ${{ inputs.engine }}
+          THRESHOLD_STRATEGY: ${{ inputs.threshold_strategy }}
           CONTAMINATION: ${{ inputs.contamination }}
+          PERCENTILE: ${{ inputs.percentile }}
+          SCORE_THRESHOLD: ${{ inputs.score_threshold }}
+          KNN_K: ${{ inputs.knn_k }}
+          FEATURES_MODE: ${{ inputs.features_mode }}
           TOP_K: ${{ inputs.top_k }}
           EXPLAIN_TOP: ${{ inputs.explain_top }}
           SEED: ${{ inputs.seed }}
@@ -124,41 +157,33 @@ jobs:
           OUT_DIR="results/${RUN_NAME}"
           mkdir -p "${OUT_DIR}"
 
-          PLOT_ARG=""
+          ARGS=( --mode "${MODE}" --radius-deg "${RADIUS_DEG}" --limit "${LIMIT}" --out "${OUT_DIR}" )
+          ARGS+=( --engine "${ENGINE}" --threshold-strategy "${THRESHOLD_STRATEGY}" )
+          ARGS+=( --knn-k "${KNN_K}" --features-mode "${FEATURES_MODE}" )
+          ARGS+=( --top-k "${TOP_K}" --explain-top "${EXPLAIN_TOP}" --seed "${SEED}" )
+
+          if [ "${THRESHOLD_STRATEGY}" = "contamination" ]; then
+            ARGS+=( --contamination "${CONTAMINATION}" )
+          elif [ "${THRESHOLD_STRATEGY}" = "percentile" ]; then
+            ARGS+=( --percentile "${PERCENTILE}" )
+          elif [ "${THRESHOLD_STRATEGY}" = "score" ]; then
+            ARGS+=( --score-threshold "${SCORE_THRESHOLD}" )
+          fi
+
           if [ "${PLOTS}" = "true" ]; then
-            PLOT_ARG="--plots"
+            ARGS+=( --plots )
           fi
 
           if [ "${MODE}" = "gaia" ]; then
-            python run_workflow.py \
-              --mode gaia \
-              --ra "${RA}" \
-              --dec "${DEC}" \
-              --radius-deg "${RADIUS_DEG}" \
-              --limit "${LIMIT}" \
-              --knn-k "${KNN_K}" \
-              --engine isolation_forest \
-              --contamination "${CONTAMINATION}" \
-              --top-k "${TOP_K}" \
-              --explain-top "${EXPLAIN_TOP}" \
-              --seed "${SEED}" \
-              --out "${OUT_DIR}" \
-              ${PLOT_ARG}
+            ARGS+=( --ra "${RA}" --dec "${DEC}" )
           else
-            python run_workflow.py \
-              --mode csv \
-              --in-csv "${IN_CSV}" \
-              --radius-deg "${RADIUS_DEG}" \
-              --limit "${LIMIT}" \
-              --knn-k "${KNN_K}" \
-              --engine isolation_forest \
-              --contamination "${CONTAMINATION}" \
-              --top-k "${TOP_K}" \
-              --explain-top "${EXPLAIN_TOP}" \
-              --seed "${SEED}" \
-              --out "${OUT_DIR}" \
-              ${PLOT_ARG}
+            ARGS+=( --in-csv "${IN_CSV}" )
           fi
+
+          echo "Command:"
+          printf "python run_workflow.py"; printf " %q" "${ARGS[@]}"; echo
+
+          python run_workflow.py "${ARGS[@]}"
 
           echo "Run outputs:"
           ls -la "${OUT_DIR}" || true
@@ -177,24 +202,25 @@ jobs:
 
           test -f "${SCORED}" || (echo "scored.csv absent: ${SCORED}" && exit 1)
 
-          ARGS=( --run-dir "${RUN_DIR}" --scored "${SCORED}" )
-
+          VARGS=( --run-dir "${RUN_DIR}" --scored "${SCORED}" )
           if [ -f "${GRAPH}" ]; then
-            ARGS+=( --graph "${GRAPH}" )
+            VARGS+=( --graph "${GRAPH}" )
           fi
-
           if [ -f "${EXPLAIN}" ]; then
-            ARGS+=( --explain "${EXPLAIN}" )
+            VARGS+=( --explain "${EXPLAIN}" )
           fi
 
-          python tools/viz_a_to_h_suite.py "${ARGS[@]}"
+          echo "Command:"
+          printf "python tools/viz_a_to_h_suite.py"; printf " %q" "${VARGS[@]}"; echo
+
+          python tools/viz_a_to_h_suite.py "${VARGS[@]}"
 
           echo "Viz outputs:"
           find "${RUN_DIR}" -maxdepth 6 -type f \( -name "*.png" -o -name "*.html" -o -name "*.gif" \) | sort || true
 
           HTML_COUNT="$(find "${RUN_DIR}" -type f -name "*.html" | wc -l | tr -d ' ')"
           if [ "${HTML_COUNT}" = "0" ]; then
-            echo "Aucun HTML genere. La 3D n'a pas ete produite."
+            echo "Aucun HTML genere, la 3D n'a pas ete produite"
             exit 1
           fi
 
