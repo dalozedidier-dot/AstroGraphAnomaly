@@ -359,9 +359,13 @@ def export_celestial_sphere(df: pd.DataFrame, out_html: Path) -> None:
 
 
 def export_network_explorer(df: pd.DataFrame, G_opt, out_html: Path) -> None:
-    if not _HAS_PYVIS:
-        out_html.write_text("PyVis not installed. Install requirements_viz.txt.", encoding="utf-8")
-        return
+    """Export an *offline* interactive network explorer.
+
+    Preferred backend is PyVis only when it can embed resources inline.
+    If PyVis is missing or generates HTML with external dependencies (node_modules/CDN),
+    we fall back to a fully self-contained Plotly (inline) explorer.
+    """
+
     if G_opt is None:
         out_html.write_text("No graph provided (graph_full/union.graphml).", encoding="utf-8")
         return
@@ -374,35 +378,198 @@ def export_network_explorer(df: pd.DataFrame, G_opt, out_html: Path) -> None:
         d["source_id"] = d.index.astype(str)
     d = d.set_index("source_id", drop=False)
 
+    # ---------- Try PyVis (only if truly offline) ----------
+    if _HAS_PYVIS:
+        try:
+            net = Network(
+                height="820px",
+                width="100%",
+                bgcolor="#05060a",
+                font_color="#e8e8e8",
+                directed=False,
+                cdn_resources="in_line",
+            )
+            net.force_atlas_2based(
+                gravity=-30,
+                central_gravity=0.01,
+                spring_length=110,
+                spring_strength=0.08,
+                damping=0.4,
+            )
+
+            for sid in nodes_keep:
+                row = d.loc[sid] if sid in d.index else None
+                sc = float(row["anomaly_score_norm"]) if row is not None and "anomaly_score_norm" in row else 0.2
+                size = 10 + 30 * sc
+                label = sid if sc > 0.92 else ""
+                title_parts = []
+                if row is not None:
+                    cols = [
+                        "source_id",
+                        "anomaly_score_hi",
+                        "phot_g_mean_mag",
+                        "bp_rp",
+                        "parallax",
+                        "pmra",
+                        "pmdec",
+                        "ruwe",
+                        "degree",
+                        "kcore",
+                        "betweenness",
+                    ]
+                    for c in cols:
+                        if c in row.index:
+                            title_parts.append(f"{c}: {row[c]}")
+                title = "<br>".join(title_parts) if title_parts else sid
+
+                r = int(40 + 215 * sc)
+                g = int(80 + 150 * sc)
+                b = int(220 - 160 * sc)
+                color = f"rgb({r},{g},{b})"
+                net.add_node(sid, label=label, title=title, value=size, color=color)
+
+            for u, v in edges_keep:
+                net.add_edge(u, v, value=1)
+
+            # Save to temp, then validate offline-ness
+            tmp_html = out_html.with_suffix(".pyvis.tmp.html")
+            net.save_graph(str(tmp_html))
+
+            txt = tmp_html.read_text(encoding="utf-8", errors="ignore").lower()
+            # If pyvis couldn't inline resources (older versions), it often references node_modules or CDNs.
+            bad = (
+                ("node_modules" in txt)
+                or ("cdn.jsdelivr" in txt)
+                or ("cdnjs" in txt)
+                or ("unpkg" in txt)
+                or ("<script" in txt and "src=" in txt)  # external script tags
+            )
+
+            if not bad:
+                # Great: keep PyVis version
+                tmp_html.replace(out_html)
+                return
+
+            # Otherwise discard and fall back to Plotly
+            try:
+                tmp_html.unlink()
+            except Exception:
+                pass
+
+        except TypeError:
+            # PyVis too old (no cdn_resources arg) -> fall back to Plotly
+            pass
+        except Exception:
+            # Any other PyVis failure -> fall back to Plotly
+            pass
+
+    # ---------- Plotly fallback (guaranteed offline) ----------
+    # Use existing node x/y if present, else fall back to spring layout for a smaller sample.
     try:
-        net = Network(height="820px", width="100%", bgcolor="#05060a", font_color="#e8e8e8", directed=False, cdn_resources="in_line")
-    except TypeError:
-        net = Network(height="820px", width="100%", bgcolor="#05060a", font_color="#e8e8e8", directed=False)
-    net.force_atlas_2based(gravity=-30, central_gravity=0.01, spring_length=110, spring_strength=0.08, damping=0.4)
+        import plotly.graph_objects as go
+        import plotly.io as pio
+    except Exception:
+        out_html.write_text("Plotly not installed. Install requirements_viz.txt.", encoding="utf-8")
+        return
+
+    # Positions
+    pos_x = {}
+    pos_y = {}
+    for sid in nodes_keep:
+        if sid in G.nodes:
+            nd = G.nodes[sid]
+            if "x" in nd and "y" in nd:
+                try:
+                    pos_x[sid] = float(nd["x"])
+                    pos_y[sid] = float(nd["y"])
+                except Exception:
+                    pass
+
+    if len(pos_x) < max(10, int(0.3 * len(nodes_keep))):
+        # If x/y are not available for most nodes, use spring layout on a smaller set
+        sub = G.subgraph(list(nodes_keep)).copy()
+        keep_small = list(sub.nodes())[:400]
+        sub = sub.subgraph(keep_small).copy()
+        layout = nx.spring_layout(sub, seed=0, k=None, iterations=50)
+        nodes_keep = set(sub.nodes())
+        edges_keep = [(u, v) for (u, v) in edges_keep if (u in nodes_keep and v in nodes_keep)]
+        pos_x = {k: float(v[0]) for k, v in layout.items()}
+        pos_y = {k: float(v[1]) for k, v in layout.items()}
+
+    # Edge trace
+    ex = []
+    ey = []
+    for u, v in edges_keep:
+        if u in pos_x and v in pos_x:
+            ex += [pos_x[u], pos_x[v], None]
+            ey += [pos_y[u], pos_y[v], None]
+
+    edge_trace = go.Scattergl(
+        x=ex,
+        y=ey,
+        mode="lines",
+        line=dict(width=0.6, color="rgba(180,180,200,0.25)"),
+        hoverinfo="none",
+        name="edges",
+    )
+
+    # Node trace
+    xs = []
+    ys = []
+    sizes = []
+    texts = []
+    colors = []
 
     for sid in nodes_keep:
+        if sid not in pos_x:
+            continue
         row = d.loc[sid] if sid in d.index else None
         sc = float(row["anomaly_score_norm"]) if row is not None and "anomaly_score_norm" in row else 0.2
-        size = 10 + 30*sc
-        label = sid if sc > 0.92 else ""
-        title_parts = []
+        size = 6 + 18 * sc
+
+        title_parts = [f"source_id: {sid}", f"anomaly_score_norm: {sc:.4f}"]
         if row is not None:
-            cols = ["source_id","anomaly_score_hi","phot_g_mean_mag","bp_rp","parallax","pmra","pmdec","ruwe","degree","kcore","betweenness"]
-            for c in cols:
+            for c in ["phot_g_mean_mag", "bp_rp", "parallax", "pmra", "pmdec", "ruwe", "degree", "kcore", "betweenness"]:
                 if c in row.index:
                     title_parts.append(f"{c}: {row[c]}")
-        title = "<br>".join(title_parts) if title_parts else sid
+        title = "<br>".join(title_parts)
 
-        r = int(40 + 215*sc)
-        g = int(80 + 150*sc)
-        b = int(220 - 160*sc)
-        color = f"rgb({r},{g},{b})"
-        net.add_node(sid, label=label, title=title, value=size, color=color)
+        xs.append(pos_x[sid])
+        ys.append(pos_y[sid])
+        sizes.append(size)
+        texts.append(title)
 
-    for u, v in edges_keep:
-        net.add_edge(u, v, value=1)
+        # Color ramp based on anomaly score
+        r = int(50 + 205 * sc)
+        g = int(90 + 130 * sc)
+        b = int(230 - 170 * sc)
+        colors.append(f"rgb({r},{g},{b})")
 
-    net.save_graph(str(out_html))
+    node_trace = go.Scattergl(
+        x=xs,
+        y=ys,
+        mode="markers",
+        marker=dict(size=sizes, color=colors, opacity=0.9),
+        text=texts,
+        hoverinfo="text",
+        name="nodes",
+    )
+
+    fig = go.Figure(data=[edge_trace, node_trace])
+    fig.update_layout(
+        title="Network Explorer (offline)",
+        paper_bgcolor="#05060a",
+        plot_bgcolor="#05060a",
+        font=dict(color="#e8e8e8"),
+        margin=dict(l=10, r=10, t=50, b=10),
+        xaxis=dict(showgrid=False, zeroline=False, visible=False),
+        yaxis=dict(showgrid=False, zeroline=False, visible=False),
+        showlegend=False,
+        height=820,
+    )
+
+    html = pio.to_html(fig, full_html=True, include_plotlyjs="inline")
+    out_html.write_text(html, encoding="utf-8")
 
 
 def load_lime_matrix(explain_jsonl: Path, top_ids: List[str]) -> Optional[Tuple[List[str], List[str], np.ndarray]]:
