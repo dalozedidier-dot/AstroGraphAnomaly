@@ -1,4 +1,4 @@
-name: "Manual run + Viz A to H (3D HTML)"
+name: manual_viz_a_to_h
 
 on:
   workflow_dispatch:
@@ -28,12 +28,13 @@ on:
         description: "Dec en degrés (mode gaia)"
         required: false
         default: "-28.936175"
+
       radius_deg:
         description: "Rayon en degrés"
         required: true
         default: "0.5"
       limit:
-        description: "Limite lignes (0 = pas de limite)"
+        description: "Limite lignes"
         required: true
         default: "2000"
 
@@ -50,7 +51,7 @@ on:
         required: true
         default: "30"
       explain_top:
-        description: "Nombre d'anomalies expliquées (LIME si dispo)"
+        description: "Nombre d'anomalies expliquées"
         required: true
         default: "5"
       seed:
@@ -63,7 +64,7 @@ on:
         required: true
         default: "true"
       generate_viz:
-        description: "Générer la suite Viz A to H (inclut HTML 3D)"
+        description: "Générer Viz A à H (HTML 3D)"
         required: true
         default: "true"
 
@@ -75,6 +76,21 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
+    env:
+      RUN_NAME: ${{ inputs.run_name }}
+      MODE: ${{ inputs.mode }}
+      IN_CSV: ${{ inputs.in_csv }}
+      RA: ${{ inputs.ra }}
+      DEC: ${{ inputs.dec }}
+      RADIUS_DEG: ${{ inputs.radius_deg }}
+      LIMIT: ${{ inputs.limit }}
+      KNN_K: ${{ inputs.knn_k }}
+      CONTAMINATION: ${{ inputs.contamination }}
+      TOP_K: ${{ inputs.top_k }}
+      EXPLAIN_TOP: ${{ inputs.explain_top }}
+      SEED: ${{ inputs.seed }}
+      PLOTS: ${{ inputs.plots }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -83,7 +99,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ inputs.python_version }}
-          cache: "pip"
+          cache: pip
 
       - name: Install deps
         run: |
@@ -91,30 +107,109 @@ jobs:
           python -V
           python -m pip install --upgrade pip
 
-          if [ -f pyproject.toml ]; then
-            python -m pip install -e ".[dev]" || python -m pip install -e .
-          fi
-
           if [ -f requirements.txt ]; then
             python -m pip install -r requirements.txt
           fi
 
           if [ -f requirements_viz.txt ]; then
             python -m pip install -r requirements_viz.txt
-          else
-            echo "requirements_viz.txt absent, les sorties HTML 3D risquent de manquer"
           fi
 
-      - name: Sanity check expected files
+          if [ -f pyproject.toml ]; then
+            python -m pip install -e .
+          fi
+
+      - name: Run core (run_workflow.py)
         run: |
           set -euo pipefail
-          ls -la
+
           test -f run_workflow.py || (echo "run_workflow.py introuvable à la racine" && exit 1)
 
-          if [ "${{ inputs.generate_viz }}" = "true" ]; then
-            test -f tools/viz_a_to_h_suite.py || (echo "tools/viz_a_to_h_suite.py absent, impossible de générer la 3D" && exit 1)
+          PLOT_ARG=""
+          if [ "${PLOTS}" = "true" ]; then
+            PLOT_ARG="--plots"
           fi
 
-      - name: Run core pipeline (run_workflow.py)
-        env:
-          RUN_NAME: ${{_
+          if [ "${MODE}" = "gaia" ]; then
+            python run_workflow.py \
+              --mode gaia \
+              --ra "${RA}" \
+              --dec "${DEC}" \
+              --radius-deg "${RADIUS_DEG}" \
+              --limit "${LIMIT}" \
+              --knn-k "${KNN_K}" \
+              --engine isolation_forest \
+              --contamination "${CONTAMINATION}" \
+              --top-k "${TOP_K}" \
+              --explain-top "${EXPLAIN_TOP}" \
+              --seed "${SEED}" \
+              ${PLOT_ARG}
+          else
+            python run_workflow.py \
+              --mode csv \
+              --in-csv "${IN_CSV}" \
+              --radius-deg "${RADIUS_DEG}" \
+              --limit "${LIMIT}" \
+              --knn-k "${KNN_K}" \
+              --engine isolation_forest \
+              --contamination "${CONTAMINATION}" \
+              --top-k "${TOP_K}" \
+              --explain-top "${EXPLAIN_TOP}" \
+              --seed "${SEED}" \
+              ${PLOT_ARG}
+          fi
+
+      - name: Collect outputs into results/<run_name>
+        run: |
+          set -euo pipefail
+
+          RUN_DIR="results/${RUN_NAME}"
+          mkdir -p "${RUN_DIR}"
+
+          for f in raw.csv scored.csv scored_enriched.csv top_anomalies.csv graph_full.graphml graph_topk.graphml manifest.json explanations.jsonl llm_prompts.jsonl; do
+            if [ -f "${f}" ]; then
+              mv "${f}" "${RUN_DIR}/"
+            fi
+          done
+
+          if [ -d plots ]; then
+            mkdir -p "${RUN_DIR}/plots"
+            mv plots/* "${RUN_DIR}/plots/" || true
+            rmdir plots || true
+          fi
+
+          echo "Run dir:"
+          ls -la "${RUN_DIR}" || true
+
+      - name: Viz A to H (HTML 3D)
+        if: ${{ inputs.generate_viz == 'true' }}
+        run: |
+          set -euo pipefail
+
+          test -f tools/viz_a_to_h_suite.py || (echo "tools/viz_a_to_h_suite.py absent" && exit 1)
+
+          RUN_DIR="results/${RUN_NAME}"
+          test -f "${RUN_DIR}/scored.csv" || (echo "scored.csv absent dans ${RUN_DIR}" && exit 1)
+
+          ARGS=( --run-dir "${RUN_DIR}" --scored "${RUN_DIR}/scored.csv" )
+
+          if [ -f "${RUN_DIR}/graph_full.graphml" ]; then
+            ARGS+=( --graph "${RUN_DIR}/graph_full.graphml" )
+          fi
+
+          if [ -f "${RUN_DIR}/explanations.jsonl" ]; then
+            ARGS+=( --explain "${RUN_DIR}/explanations.jsonl" )
+          fi
+
+          python tools/viz_a_to_h_suite.py "${ARGS[@]}"
+
+          echo "Outputs (png/html/gif):"
+          find "${RUN_DIR}" -maxdepth 6 -type f \( -name "*.png" -o -name "*.html" -o -name "*.gif" \) | sort || true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: astrographanomaly_${{ inputs.run_name }}
+          path: results/${{ inputs.run_name }}
+          if-no-files-found: error
+          retention-days: 14
