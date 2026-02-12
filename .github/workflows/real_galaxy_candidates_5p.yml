@@ -1,0 +1,248 @@
+name: real_galaxy_candidates_5p
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_name:
+        description: "Nom du run"
+        required: true
+        default: "gaia_galaxies_5p"
+      python_version:
+        description: "Python"
+        required: true
+        default: "3.12"
+
+      limit:
+        description: "Nombre max lignes"
+        required: true
+        default: "2000"
+      p_galaxy_min:
+        description: "Probabilite galaxie min"
+        required: true
+        default: "0.80"
+      ruwe_max:
+        description: "RUWE max (qualite astrometrique)"
+        required: true
+        default: "2.0"
+
+      knn_k:
+        description: "k kNN"
+        required: true
+        default: "8"
+      engine:
+        description: "engine"
+        required: true
+        default: "isolation_forest"
+      threshold_strategy:
+        description: "threshold_strategy"
+        required: true
+        default: "contamination"
+      contamination:
+        description: "contamination"
+        required: true
+        default: "0.05"
+      top_k:
+        description: "top_k"
+        required: true
+        default: "30"
+      explain_top:
+        description: "explain_top"
+        required: true
+        default: "5"
+      seed:
+        description: "seed"
+        required: true
+        default: "42"
+
+      plots:
+        description: "plots true/false"
+        required: true
+        default: "true"
+      generate_viz:
+        description: "viz A a H true/false"
+        required: true
+        default: "true"
+      fallback_to_sample:
+        description: "fallback sample si TAP down"
+        required: true
+        default: "true"
+
+permissions:
+  contents: read
+
+jobs:
+  run_real_galaxy_candidates_5p:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python_version }}
+          cache: pip
+
+      - name: Install deps
+        run: |
+          set -euo pipefail
+          python -V
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then python -m pip install -r requirements.txt; fi
+          if [ -f requirements_viz.txt ]; then python -m pip install -r requirements_viz.txt; fi
+          if [ -f pyproject.toml ]; then python -m pip install -e .; fi
+
+      - name: Fetch galaxy_candidates JOIN gaia_source (5p astrometry, CSV)
+        env:
+          LIMIT: ${{ inputs.limit }}
+          P_MIN: ${{ inputs.p_galaxy_min }}
+          RUWE_MAX: ${{ inputs.ruwe_max }}
+          FALLBACK: ${{ inputs.fallback_to_sample }}
+        run: |
+          set -euo pipefail
+          mkdir -p data
+
+          python - <<'PY'
+          import os
+          import shutil
+          import urllib.parse
+          import urllib.request
+          import pandas as pd
+
+          limit = int(os.environ["LIMIT"])
+          pmin = float(os.environ["P_MIN"])
+          ruwe_max = float(os.environ["RUWE_MAX"])
+          fallback = os.environ.get("FALLBACK","true").lower() == "true"
+
+          out_csv = "data/gaia_galaxy_candidates_5p.csv"
+          endpoint = "https://gea.esac.esa.int/tap-server/tap/sync"
+
+          query = f"""
+          SELECT TOP {limit}
+            CAST(gs.source_id AS VARCHAR) AS source_id,
+            gs.ra, gs.dec,
+            gs.parallax, gs.parallax_error,
+            gs.pmra, gs.pmra_error,
+            gs.pmdec, gs.pmdec_error,
+            gs.phot_g_mean_mag, gs.bp_rp, gs.ruwe,
+
+            gc.classprob_dsc_combmod_galaxy,
+            gc.classprob_dsc_combmod_quasar,
+            gc.classlabel_dsc,
+            gc.redshift_ugc,
+            gc.radius_sersic,
+            gc.ellipticity_sersic,
+            gc.source_selection_flags
+          FROM gaiadr3.galaxy_candidates AS gc
+          JOIN gaiadr3.gaia_source AS gs
+          USING (source_id)
+          WHERE gc.classprob_dsc_combmod_galaxy >= {pmin}
+            AND gs.ra IS NOT NULL AND gs.dec IS NOT NULL
+            AND gs.phot_g_mean_mag IS NOT NULL
+            AND gs.bp_rp IS NOT NULL
+            AND gs.ruwe IS NOT NULL AND gs.ruwe <= {ruwe_max}
+            AND gs.parallax IS NOT NULL AND gs.parallax_error IS NOT NULL AND gs.parallax > 0
+            AND gs.pmra IS NOT NULL AND gs.pmra_error IS NOT NULL
+            AND gs.pmdec IS NOT NULL AND gs.pmdec_error IS NOT NULL
+          """
+
+          data = urllib.parse.urlencode(
+            {"REQUEST":"doQuery","LANG":"ADQL","FORMAT":"csv","QUERY":query}
+          ).encode("utf-8")
+
+          try:
+              req = urllib.request.Request(endpoint, data=data, method="POST")
+              with urllib.request.urlopen(req, timeout=120) as r:
+                  content = r.read()
+              if len(content) < 200:
+                  raise RuntimeError("Reponse trop courte, possible erreur TAP")
+              with open(out_csv, "wb") as f:
+                  f.write(content)
+              print(f"OK wrote {out_csv} bytes={len(content)}")
+          except Exception as e:
+              print("ERROR TAP:", e)
+              if not fallback:
+                  raise
+              sample = "data/sample_gaia_like.csv"
+              if not os.path.exists(sample):
+                  raise RuntimeError("Fallback sample absent: data/sample_gaia_like.csv")
+              shutil.copy2(sample, out_csv)
+              print("FALLBACK ->", out_csv)
+
+          df = pd.read_csv(out_csv)
+          print("rows:", len(df), "cols:", len(df.columns))
+          req_cols = [
+              "ra","dec","parallax","parallax_error","pmra","pmra_error",
+              "pmdec","pmdec_error","phot_g_mean_mag","bp_rp","ruwe"
+          ]
+          ok = int(df[req_cols].notna().all(axis=1).sum())
+          print("rows with required 5p+phot:", ok)
+          print("parallax>0 rows:", int((df["parallax"] > 0).sum()))
+          PY
+
+          head -n 3 data/gaia_galaxy_candidates_5p.csv || true
+
+      - name: Run pipeline
+        env:
+          RUN_NAME: ${{ inputs.run_name }}
+          KNN_K: ${{ inputs.knn_k }}
+          ENGINE: ${{ inputs.engine }}
+          THRESHOLD_STRATEGY: ${{ inputs.threshold_strategy }}
+          CONTAMINATION: ${{ inputs.contamination }}
+          TOP_K: ${{ inputs.top_k }}
+          EXPLAIN_TOP: ${{ inputs.explain_top }}
+          SEED: ${{ inputs.seed }}
+          PLOTS: ${{ inputs.plots }}
+        run: |
+          set -euo pipefail
+
+          test -f run_workflow.py || (echo "run_workflow.py absent" && exit 1)
+
+          OUT_DIR="results/${RUN_NAME}"
+          mkdir -p "${OUT_DIR}"
+          cp data/gaia_galaxy_candidates_5p.csv "${OUT_DIR}/input_gaia.csv" || true
+
+          ARGS=( --mode csv --in-csv "data/gaia_galaxy_candidates_5p.csv" --out "${OUT_DIR}" )
+          ARGS+=( --knn-k "${KNN_K}" --engine "${ENGINE}" --threshold-strategy "${THRESHOLD_STRATEGY}" )
+          ARGS+=( --top-k "${TOP_K}" --explain-top "${EXPLAIN_TOP}" --seed "${SEED}" )
+
+          if [ "${THRESHOLD_STRATEGY}" = "contamination" ]; then
+            ARGS+=( --contamination "${CONTAMINATION}" )
+          fi
+          if [ "${PLOTS}" = "true" ]; then
+            ARGS+=( --plots )
+          fi
+
+          echo "Command:"
+          printf "python run_workflow.py"; printf " %q" "${ARGS[@]}"; echo
+
+          python run_workflow.py "${ARGS[@]}"
+
+      - name: Viz A a H
+        if: ${{ inputs.generate_viz == 'true' }}
+        env:
+          RUN_NAME: ${{ inputs.run_name }}
+        run: |
+          set -euo pipefail
+
+          test -f tools/viz_a_to_h_suite.py || (echo "tools/viz_a_to_h_suite.py absent" && exit 1)
+
+          RUN_DIR="results/${RUN_NAME}"
+          test -f "${RUN_DIR}/scored.csv" || (echo "scored.csv absent dans ${RUN_DIR}" && exit 1)
+
+          VARGS=( --run-dir "${RUN_DIR}" --scored "${RUN_DIR}/scored.csv" )
+          if [ -f "${RUN_DIR}/graph_full.graphml" ]; then VARGS+=( --graph "${RUN_DIR}/graph_full.graphml" ); fi
+          if [ -f "${RUN_DIR}/explanations.jsonl" ]; then VARGS+=( --explain "${RUN_DIR}/explanations.jsonl" ); fi
+
+          python tools/viz_a_to_h_suite.py "${VARGS[@]}"
+
+      - name: Upload artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real_galaxy_candidates_5p_${{ inputs.run_name }}_${{ github.run_id }}
+          path: results/${{ inputs.run_name }}
+          if-no-files-found: error
+          retention-days: 14
