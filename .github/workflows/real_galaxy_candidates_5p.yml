@@ -94,7 +94,7 @@ jobs:
           if [ -f requirements_viz.txt ]; then python -m pip install -r requirements_viz.txt; fi
           if [ -f pyproject.toml ]; then python -m pip install -e .; fi
 
-      - name: Fetch galaxy_candidates JOIN gaia_source (5p astrometry, CSV)
+      - name: Fetch galaxy candidates JOIN gaia_source (5p astrometry, CSV)
         env:
           LIMIT: ${{ inputs.limit }}
           P_MIN: ${{ inputs.p_galaxy_min }}
@@ -119,6 +119,7 @@ jobs:
           out_csv = "data/gaia_galaxy_candidates_5p.csv"
           endpoint = "https://gea.esac.esa.int/tap-server/tap/sync"
 
+          # IMPORTANT: same rationale as quasar workflow (avoid all-NULL columns).
           query = f"""
           SELECT TOP {limit}
             CAST(gs.source_id AS VARCHAR) AS source_id,
@@ -131,7 +132,6 @@ jobs:
             gc.classprob_dsc_combmod_galaxy,
             gc.classprob_dsc_combmod_quasar,
             gc.classlabel_dsc,
-            gc.redshift_ugc,
             gc.radius_sersic,
             gc.ellipticity_sersic,
             gc.source_selection_flags
@@ -179,10 +179,29 @@ jobs:
           ]
           ok = int(df[req_cols].notna().all(axis=1).sum())
           print("rows with required 5p+phot:", ok)
-          print("parallax>0 rows:", int((df["parallax"] > 0).sum()))
           PY
 
           head -n 3 data/gaia_galaxy_candidates_5p.csv || true
+
+      - name: Sanitize CSV (drop all-NaN columns)
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import pandas as pd
+
+          path = "data/gaia_galaxy_candidates_5p.csv"
+          df = pd.read_csv(path)
+
+          all_nan = [c for c in df.columns if df[c].isna().all()]
+          if all_nan:
+              df = df.drop(columns=all_nan)
+
+          remaining_nan_cols = [c for c in df.columns if df[c].isna().any()]
+          print("all_nan_cols_dropped:", all_nan)
+          print("remaining_nan_cols:", remaining_nan_cols)
+          print("final rows:", len(df), "final cols:", len(df.columns))
+          df.to_csv(path, index=False)
+          PY
 
       - name: Run pipeline
         env:
@@ -214,9 +233,6 @@ jobs:
           if [ "${PLOTS}" = "true" ]; then
             ARGS+=( --plots )
           fi
-
-          echo "Command:"
-          printf "python run_workflow.py"; printf " %q" "${ARGS[@]}"; echo
 
           python run_workflow.py "${ARGS[@]}"
 
