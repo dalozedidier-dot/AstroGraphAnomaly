@@ -11,8 +11,9 @@ on:
         description: "Version Python"
         required: true
         default: "3.12"
+
       mode:
-        description: "Mode: csv ou gaia"
+        description: "csv ou gaia"
         required: true
         default: "csv"
       in_csv:
@@ -28,28 +29,46 @@ on:
         required: false
         default: "-28.936175"
       radius_deg:
-        description: "Rayon en degrés (mode gaia)"
+        description: "Rayon en degrés"
         required: true
         default: "0.5"
       limit:
         description: "Limite lignes (0 = pas de limite)"
         required: true
         default: "2000"
+
+      knn_k:
+        description: "k du graphe kNN"
+        required: true
+        default: "8"
+      contamination:
+        description: "Contamination IsolationForest"
+        required: true
+        default: "0.05"
+      top_k:
+        description: "Top K anomalies exportées"
+        required: true
+        default: "30"
       explain_top:
         description: "Nombre d'anomalies expliquées (LIME si dispo)"
         required: true
-        default: "10"
+        default: "5"
+      seed:
+        description: "Seed"
+        required: true
+        default: "42"
+
+      plots:
+        description: "Produire les plots PNG"
+        required: true
+        default: "true"
       generate_viz:
-        description: "Générer la suite Viz A à H (inclut HTML 3D)"
+        description: "Générer la suite Viz A to H (inclut HTML 3D)"
         required: true
         default: "true"
 
 permissions:
   contents: read
-
-concurrency:
-  group: astrographanomaly-manual-${{ github.ref }}
-  cancel-in-progress: false
 
 jobs:
   run_and_viz:
@@ -72,112 +91,30 @@ jobs:
           python -V
           python -m pip install --upgrade pip
 
-          # Installation package si possible, sans casser si pas d'extras
           if [ -f pyproject.toml ]; then
             python -m pip install -e ".[dev]" || python -m pip install -e .
           fi
 
-          # Dépendances runtime
           if [ -f requirements.txt ]; then
             python -m pip install -r requirements.txt
           fi
 
-          # Dépendances viz (Plotly, PyVis, etc.)
           if [ -f requirements_viz.txt ]; then
             python -m pip install -r requirements_viz.txt
           else
-            echo "requirements_viz.txt absent. Les sorties 3D HTML risquent de manquer."
+            echo "requirements_viz.txt absent, les sorties HTML 3D risquent de manquer"
+          fi
+
+      - name: Sanity check expected files
+        run: |
+          set -euo pipefail
+          ls -la
+          test -f run_workflow.py || (echo "run_workflow.py introuvable à la racine" && exit 1)
+
+          if [ "${{ inputs.generate_viz }}" = "true" ]; then
+            test -f tools/viz_a_to_h_suite.py || (echo "tools/viz_a_to_h_suite.py absent, impossible de générer la 3D" && exit 1)
           fi
 
       - name: Run core pipeline (run_workflow.py)
         env:
-          RUN_NAME: ${{ inputs.run_name }}
-          MODE: ${{ inputs.mode }}
-          IN_CSV: ${{ inputs.in_csv }}
-          RA: ${{ inputs.ra }}
-          DEC: ${{ inputs.dec }}
-          RADIUS_DEG: ${{ inputs.radius_deg }}
-          LIMIT: ${{ inputs.limit }}
-          EXPLAIN_TOP: ${{ inputs.explain_top }}
-        run: |
-          set -euo pipefail
-          OUT_DIR="results/${RUN_NAME}"
-          mkdir -p "${OUT_DIR}"
-
-          if [ ! -f run_workflow.py ]; then
-            echo "run_workflow.py introuvable à la racine. Vérifie l'entrypoint."
-            exit 1
-          fi
-
-          if [ "${MODE}" = "gaia" ]; then
-            python run_workflow.py \
-              --mode gaia \
-              --ra "${RA}" \
-              --dec "${DEC}" \
-              --radius-deg "${RADIUS_DEG}" \
-              --limit "${LIMIT}" \
-              --out "${OUT_DIR}" \
-              --plots \
-              --explain-top "${EXPLAIN_TOP}"
-          else
-            python run_workflow.py \
-              --mode csv \
-              --in-csv "${IN_CSV}" \
-              --radius-deg "${RADIUS_DEG}" \
-              --limit "${LIMIT}" \
-              --out "${OUT_DIR}" \
-              --plots \
-              --explain-top "${EXPLAIN_TOP}"
-          fi
-
-          echo "Contenu du run:"
-          ls -la "${OUT_DIR}" || true
-
-      - name: Generate Viz A to H (3D HTML included)
-        if: ${{ inputs.generate_viz == 'true' }}
-        env:
-          RUN_NAME: ${{ inputs.run_name }}
-        run: |
-          set -euo pipefail
-          RUN_DIR="results/${RUN_NAME}"
-
-          if [ ! -f tools/viz_a_to_h_suite.py ]; then
-            echo "tools/viz_a_to_h_suite.py absent. La suite A à H n'est pas dans le repo."
-            exit 1
-          fi
-
-          SCORED="${RUN_DIR}/scored.csv"
-          GRAPH="${RUN_DIR}/graph_full.graphml"
-          EXPLAIN="${RUN_DIR}/explanations.jsonl"
-
-          if [ ! -f "${SCORED}" ]; then
-            echo "Fichier manquant: ${SCORED}"
-            exit 1
-          fi
-
-          ARGS=( --run-dir "${RUN_DIR}" --scored "${SCORED}" )
-
-          if [ -f "${GRAPH}" ]; then
-            ARGS+=( --graph "${GRAPH}" )
-          else
-            echo "graph_full.graphml absent, certaines viz réseau vont dégrader"
-          fi
-
-          if [ -f "${EXPLAIN}" ]; then
-            ARGS+=( --explain "${EXPLAIN}" )
-          else
-            echo "explanations.jsonl absent, heatmaps explicabilité en fallback"
-          fi
-
-          python tools/viz_a_to_h_suite.py "${ARGS[@]}"
-
-          echo "Fichiers viz produits (png/html/gif):"
-          find "${RUN_DIR}" -maxdepth 5 -type f \( -name "*.png" -o -name "*.html" -o -name "*.gif" \) | sort || true
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: astrographanomaly_${{ inputs.run_name }}
-          path: results/${{ inputs.run_name }}
-          if-no-files-found: error
-          retention-days: 14
+          RUN_NAME: ${{_
