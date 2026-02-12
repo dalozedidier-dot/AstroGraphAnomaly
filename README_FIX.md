@@ -1,14 +1,14 @@
-AstroGraphAnomaly: fix Matplotlib canvas capture (GIF)
+Correctifs Viz A à H
 
-What this fixes
-- Newer Matplotlib versions: FigureCanvasAgg does not expose tostring_rgb().
-- The A to H viz script failed when exporting 07_proper_motion_trails.gif.
+Ce zip contient une version complète de tools/viz_a_to_h_suite.py corrigée pour deux erreurs CI :
 
-What changed
-- In tools/viz_a_to_h_suite.py, frame capture now uses canvas.buffer_rgba() and falls back to
-  tostring_rgb() or tostring_argb() for older Matplotlib.
+1) Matplotlib: FigureCanvasAgg n'a plus tostring_rgb()
+   Fix: capture image via canvas.buffer_rgba().
 
-How to apply
-1) Unzip this archive at the repo root.
-2) Overwrite: tools/viz_a_to_h_suite.py
-3) Commit and push, then rerun the manual_viz_a_to_h workflow.
+2) Pandas/NumPy: ValueError "assignment destination is read-only" dans export_umap()
+   Fix: to_numpy(copy=True) + garde-fou si ndarray read-only (Copy-on-Write).
+
+Application
+1) Dézipper à la racine du repo (écrase tools/viz_a_to_h_suite.py)
+2) Commit + push
+3) Relancer le workflow manual_viz_a_to_h

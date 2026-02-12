@@ -624,7 +624,17 @@ def export_umap(df: pd.DataFrame, out_png: Path, out_html: Path) -> None:
         out_html.write_text("Not enough numeric columns for UMAP", encoding="utf-8")
         return
 
-    X = df[cols].apply(pd.to_numeric, errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0).to_numpy(float)
+    X = (
+        df[cols]
+        .apply(pd.to_numeric, errors="coerce")
+        .replace([np.inf, -np.inf], np.nan)
+        .fillna(0.0)
+        .to_numpy(dtype=float, copy=True)
+    )
+    # Pandas Copy-on-Write can return a read-only ndarray; make sure it's writable.
+    if not X.flags.writeable:
+        X = np.array(X, dtype=float, copy=True)
+
     for j in range(X.shape[1]):
         X[:, j] = robust_z(X[:, j])
 
