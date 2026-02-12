@@ -43,11 +43,9 @@ except Exception:
 
 try:
     import plotly.graph_objects as go  # type: ignore
-    from plotly.offline import plot as plotly_plot  # type: ignore
     _HAS_PLOTLY = True
 except Exception:
     go = None
-    plotly_plot = None
     _HAS_PLOTLY = False
 
 try:
@@ -88,6 +86,34 @@ def robust_unit_interval(x: np.ndarray) -> np.ndarray:
     return y
 
 
+
+# --- Offline HTML helpers -------------------------------------------------
+# Generated HTML must be 100% offline: Plotly.js is inlined (no CDN).
+# We also optionally export static PNG snapshots via Kaleido if installed.
+
+def write_plotly_html(fig, out_html: Path) -> None:
+    if not _HAS_PLOTLY:
+        out_html.write_text("Plotly not installed. Install requirements_viz.txt.", encoding="utf-8")
+        return
+    import plotly.io as pio  # type: ignore
+
+    config = dict(responsive=True, displayModeBar=True)
+    pio.write_html(
+        fig,
+        file=str(out_html),
+        include_plotlyjs=True,
+        full_html=True,
+        auto_open=False,
+        config=config,
+    )
+
+def maybe_write_plotly_png(fig, out_png: Path, width: int = 1400, height: int = 900) -> None:
+    try:
+        fig.write_image(str(out_png), width=width, height=height, scale=2)
+    except Exception:
+        return
+
+
 def robust_z(x: np.ndarray) -> np.ndarray:
     x = np.asarray(x, dtype=float)
     x = np.where(np.isfinite(x), x, np.nan)
@@ -108,17 +134,17 @@ def ensure_core(df: pd.DataFrame) -> pd.DataFrame:
     df["anomaly_score"] = pd.to_numeric(df["anomaly_score"], errors="coerce").fillna(0.0)
 
     if "anomaly_label" not in df.columns:
-        thr = np.nanpercentile(df["anomaly_score"].to_numpy(float), 95)
-        df["anomaly_label"] = np.where(df["anomaly_score"].to_numpy(float) >= thr, -1, 1)
+        thr = np.nanpercentile(df["anomaly_score"].to_numpy(dtype=float, copy=True), 95)
+        df["anomaly_label"] = np.where(df["anomaly_score"].to_numpy(dtype=float, copy=True) >= thr, -1, 1)
 
-    s = df["anomaly_score"].to_numpy(float)
+    s = df["anomaly_score"].to_numpy(dtype=float, copy=True)
     y = df["anomaly_label"].to_numpy(int)
     if np.mean(s[y == -1]) < np.mean(s[y == 1]):
         df["anomaly_score_hi"] = -df["anomaly_score"]
     else:
         df["anomaly_score_hi"] = df["anomaly_score"]
 
-    df["anomaly_score_norm"] = robust_unit_interval(df["anomaly_score_hi"].to_numpy(float))
+    df["anomaly_score_norm"] = robust_unit_interval(df["anomaly_score_hi"].to_numpy(dtype=float, copy=True))
 
     if "distance" not in df.columns and "parallax" in df.columns:
         par = pd.to_numeric(df["parallax"], errors="coerce")
@@ -236,9 +262,9 @@ def plot_hidden_constellations(df: pd.DataFrame, G_opt, out_png: Path) -> None:
         plt.close(fig)
         return
 
-    ra = pd.to_numeric(df["ra"], errors="coerce").fillna(0.0).to_numpy(float)
-    dec = pd.to_numeric(df["dec"], errors="coerce").fillna(0.0).to_numpy(float)
-    score = df["anomaly_score_norm"].to_numpy(float)
+    ra = pd.to_numeric(df["ra"], errors="coerce").fillna(0.0).to_numpy(dtype=float, copy=True)
+    dec = pd.to_numeric(df["dec"], errors="coerce").fillna(0.0).to_numpy(dtype=float, copy=True)
+    score = df["anomaly_score_norm"].to_numpy(dtype=float, copy=True)
 
     bins = 320
     xedges = np.linspace(np.nanmin(ra), np.nanmax(ra), bins+1)
@@ -304,14 +330,14 @@ def export_celestial_sphere(df: pd.DataFrame, out_html: Path) -> None:
         out_html.write_text("Missing ra/dec in scored.csv", encoding="utf-8")
         return
 
-    ra = np.deg2rad(pd.to_numeric(df["ra"], errors="coerce").fillna(0.0).to_numpy(float))
-    dec = np.deg2rad(pd.to_numeric(df["dec"], errors="coerce").fillna(0.0).to_numpy(float))
+    ra = np.deg2rad(pd.to_numeric(df["ra"], errors="coerce").fillna(0.0).to_numpy(dtype=float, copy=True))
+    dec = np.deg2rad(pd.to_numeric(df["dec"], errors="coerce").fillna(0.0).to_numpy(dtype=float, copy=True))
 
     x = np.cos(dec) * np.cos(ra)
     y = np.cos(dec) * np.sin(ra)
     z = np.sin(dec)
 
-    score = df["anomaly_score_norm"].to_numpy(float)
+    score = df["anomaly_score_norm"].to_numpy(dtype=float, copy=True)
     size = 3 + 10*score
 
     hover_cols = [c for c in ["source_id","anomaly_score_hi","phot_g_mean_mag","bp_rp","parallax","pmra","pmdec","ruwe"] if c in df.columns]
@@ -328,7 +354,8 @@ def export_celestial_sphere(df: pd.DataFrame, out_html: Path) -> None:
         scene=dict(xaxis=dict(visible=False), yaxis=dict(visible=False), zaxis=dict(visible=False), aspectmode="data"),
         margin=dict(l=0, r=0, b=0, t=40),
     )
-    plotly_plot(fig, filename=str(out_html), auto_open=False, include_plotlyjs="cdn")
+    write_plotly_html(fig, out_html)
+    maybe_write_plotly_png(fig, out_html.with_suffix(".png"))
 
 
 def export_network_explorer(df: pd.DataFrame, G_opt, out_html: Path) -> None:
@@ -347,7 +374,10 @@ def export_network_explorer(df: pd.DataFrame, G_opt, out_html: Path) -> None:
         d["source_id"] = d.index.astype(str)
     d = d.set_index("source_id", drop=False)
 
-    net = Network(height="820px", width="100%", bgcolor="#05060a", font_color="#e8e8e8", directed=False)
+    try:
+        net = Network(height="820px", width="100%", bgcolor="#05060a", font_color="#e8e8e8", directed=False, cdn_resources="in_line")
+    except TypeError:
+        net = Network(height="820px", width="100%", bgcolor="#05060a", font_color="#e8e8e8", directed=False)
     net.force_atlas_2based(gravity=-30, central_gravity=0.01, spring_length=110, spring_strength=0.08, damping=0.4)
 
     for sid in nodes_keep:
@@ -438,7 +468,7 @@ def plot_explainability_heatmap(df: pd.DataFrame, explain_jsonl: Optional[Path],
         num_cols = [c for c in d.columns if pd.api.types.is_numeric_dtype(d[c]) and c not in ("anomaly_label",)]
         preferred = [c for c in ["phot_g_mean_mag","bp_rp","parallax","pmra","pmdec","distance","ruwe","degree","kcore","betweenness"] if c in num_cols]
         cols = preferred if len(preferred) >= 6 else num_cols[:12]
-        Z = np.vstack([robust_z(pd.to_numeric(d[c], errors="coerce").fillna(0.0).to_numpy(float)) for c in cols]).T
+        Z = np.vstack([robust_z(pd.to_numeric(d[c], errors="coerce").fillna(0.0).to_numpy(dtype=float, copy=True)) for c in cols]).T
         title = "Explainability heatmap (fallback: robust z-scores)"
         data = Z
         ylabels = top_ids
@@ -472,7 +502,7 @@ def plot_feature_interaction_heatmap(df: pd.DataFrame, out_png: Path) -> None:
         return
 
     X = df[cols].apply(pd.to_numeric, errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0)
-    C = X.corr(method="spearman").to_numpy(float)
+    C = X.corr(method="spearman").to_numpy(dtype=float, copy=True)
 
     fig = plt.figure(figsize=(10, 8))
     ax = plt.gca()
@@ -497,11 +527,11 @@ def export_proper_motion_trails(df: pd.DataFrame, out_gif: Path, top_k: int = 30
         return
 
     d = df.sort_values("anomaly_score_hi", ascending=False).head(min(top_k, len(df))).copy()
-    ra0 = pd.to_numeric(d["ra"], errors="coerce").fillna(0.0).to_numpy(float)
-    dec0 = pd.to_numeric(d["dec"], errors="coerce").fillna(0.0).to_numpy(float)
-    pmra = pd.to_numeric(d["pmra"], errors="coerce").fillna(0.0).to_numpy(float)
-    pmdec = pd.to_numeric(d["pmdec"], errors="coerce").fillna(0.0).to_numpy(float)
-    score = d["anomaly_score_norm"].to_numpy(float)
+    ra0 = pd.to_numeric(d["ra"], errors="coerce").fillna(0.0).to_numpy(dtype=float, copy=True)
+    dec0 = pd.to_numeric(d["dec"], errors="coerce").fillna(0.0).to_numpy(dtype=float, copy=True)
+    pmra = pd.to_numeric(d["pmra"], errors="coerce").fillna(0.0).to_numpy(dtype=float, copy=True)
+    pmdec = pd.to_numeric(d["pmdec"], errors="coerce").fillna(0.0).to_numpy(dtype=float, copy=True)
+    score = d["anomaly_score_norm"].to_numpy(dtype=float, copy=True)
 
     mas2deg = 1.0 / 3.6e6
     cosd = np.cos(np.deg2rad(np.clip(dec0, -89.9, 89.9)))
@@ -571,7 +601,7 @@ def export_feature_biocubes(df: pd.DataFrame, out_html: Path) -> None:
         return
 
     def stats(d: pd.DataFrame, col: str):
-        x = pd.to_numeric(d[col], errors="coerce").replace([np.inf, -np.inf], np.nan).dropna().to_numpy(float)
+        x = pd.to_numeric(d[col], errors="coerce").replace([np.inf, -np.inf], np.nan).dropna().to_numpy(dtype=float, copy=True)
         if x.size == 0:
             return 0.0, 0.0, 0.0
         q1, med, q3 = np.percentile(x, [25, 50, 75])
@@ -607,7 +637,8 @@ def export_feature_biocubes(df: pd.DataFrame, out_html: Path) -> None:
         margin=dict(l=0, r=0, b=0, t=40),
         showlegend=False
     )
-    plotly_plot(fig, filename=str(out_html), auto_open=False, include_plotlyjs="cdn")
+    write_plotly_html(fig, out_html)
+    maybe_write_plotly_png(fig, out_html.with_suffix(".png"))
 
 
 def export_umap(df: pd.DataFrame, out_png: Path, out_html: Path) -> None:
@@ -624,17 +655,9 @@ def export_umap(df: pd.DataFrame, out_png: Path, out_html: Path) -> None:
         out_html.write_text("Not enough numeric columns for UMAP", encoding="utf-8")
         return
 
-    X = (
-        df[cols]
-        .apply(pd.to_numeric, errors="coerce")
-        .replace([np.inf, -np.inf], np.nan)
-        .fillna(0.0)
-        .to_numpy(dtype=float, copy=True)
-    )
-    # Pandas Copy-on-Write can return a read-only ndarray; make sure it's writable.
+    X = df[cols].apply(pd.to_numeric, errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0).to_numpy(dtype=float, copy=True)
     if not X.flags.writeable:
-        X = np.array(X, dtype=float, copy=True)
-
+        X = X.copy()
     for j in range(X.shape[1]):
         X[:, j] = robust_z(X[:, j])
 
@@ -645,7 +668,7 @@ def export_umap(df: pd.DataFrame, out_png: Path, out_html: Path) -> None:
         U, S, _ = np.linalg.svd(X, full_matrices=False)
         emb = U[:, :2] * S[:2]
 
-    score = df["anomaly_score_norm"].to_numpy(float)
+    score = df["anomaly_score_norm"].to_numpy(dtype=float, copy=True)
     fig = plt.figure(figsize=(10, 8))
     plt.scatter(emb[:, 0], emb[:, 1], s=18, alpha=0.78, c=score)
     plt.title("Cosmic cloud embedding (UMAP if available)")
@@ -665,7 +688,7 @@ def export_umap(df: pd.DataFrame, out_png: Path, out_html: Path) -> None:
             text=hover
         )])
         fig2.update_layout(title="UMAP cosmic cloud (interactive)", margin=dict(l=0, r=0, b=0, t=40))
-        plotly_plot(fig2, filename=str(out_html), auto_open=False, include_plotlyjs="cdn")
+        write_plotly_html(fig2, out_html)
     else:
         out_html.write_text("Plotly not installed. Install requirements_viz.txt.", encoding="utf-8")
 
@@ -689,6 +712,7 @@ def export_dashboard(out_dir: Path) -> None:
 </head>
 <body>
 <h1>AstroGraphAnomaly — A→H Gallery</h1>
+<p>All interactive HTML is generated fully offline (Plotly.js inlined). Open this folder locally, no CDN required.</p>
 <div class="links">
   <a href="{rel(out_dir/'02_celestial_sphere_3d.html')}">B) Celestial Sphere 3D</a>
   <a href="{rel(out_dir/'03_network_explorer.html')}">C) Network Explorer</a>

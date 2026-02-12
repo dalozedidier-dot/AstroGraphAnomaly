@@ -1,0 +1,99 @@
+name: ci_full_showcase
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  schedule:
+    - cron: "0 3 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-full-showcase-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  full_showcase:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install deps
+        run: |
+          set -euo pipefail
+          python -V
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then
+            python -m pip install -r requirements.txt
+          fi
+          if [ -f requirements_viz.txt ]; then
+            python -m pip install -r requirements_viz.txt
+          fi
+          if [ -f pyproject.toml ]; then
+            python -m pip install -e .
+          fi
+
+      - name: Run core (sample)
+        run: |
+          set -euo pipefail
+          test -f run_workflow.py || (echo "run_workflow.py introuvable a la racine" && exit 1)
+
+          OUT_DIR="results/ci_${{ github.run_id }}"
+          mkdir -p "${OUT_DIR}"
+
+          ARGS=( --mode csv --in-csv "data/sample_gaia_like.csv" --out "${OUT_DIR}" --plots )
+
+          echo "Command:"
+          printf "python run_workflow.py"; printf " %q" "${ARGS[@]}"; echo
+
+          python run_workflow.py "${ARGS[@]}"
+
+          echo "Run outputs:"
+          ls -la "${OUT_DIR}" || true
+
+      - name: Viz A to H (offline HTML)
+        run: |
+          set -euo pipefail
+          OUT_DIR="results/ci_${{ github.run_id }}"
+          test -f "tools/viz_a_to_h_suite.py" || (echo "tools/viz_a_to_h_suite.py absent" && exit 1)
+          test -f "${OUT_DIR}/scored.csv" || (echo "scored.csv absent dans ${OUT_DIR}" && exit 1)
+
+          VARGS=( --run-dir "${OUT_DIR}" --scored "${OUT_DIR}/scored.csv" )
+
+          if [ -f "${OUT_DIR}/graph_full.graphml" ]; then
+            VARGS+=( --graph "${OUT_DIR}/graph_full.graphml" )
+          fi
+
+          if [ -f "${OUT_DIR}/explanations.jsonl" ]; then
+            VARGS+=( --explain "${OUT_DIR}/explanations.jsonl" )
+          fi
+
+          echo "Command:"
+          printf "python tools/viz_a_to_h_suite.py"; printf " %q" "${VARGS[@]}"; echo
+
+          python tools/viz_a_to_h_suite.py "${VARGS[@]}"
+
+          echo "Viz outputs:"
+          find "${OUT_DIR}" -maxdepth 6 -type f \( -name "*.png" -o -name "*.html" -o -name "*.gif" \) | sort || true
+
+      - name: Upload artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: astrographanomaly_ci_full_showcase_${{ github.run_id }}
+          path: results/ci_${{ github.run_id }}
+          if-no-files-found: error
+          retention-days: 14
