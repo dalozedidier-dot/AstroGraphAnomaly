@@ -198,17 +198,16 @@ def _ensure_out_dir(out_dir: Path) -> Path:
     return out_dir
 
 
-def _write_html(fig: Any, path: Path, *, plotlyjs: str = "directory") -> None:
-    mode = str(plotlyjs).strip().lower()
-    if mode == "directory":
-        _ensure_plotlyjs(path.parent)
-        path.write_text(fig.to_html(full_html=True, include_plotlyjs="directory"), encoding="utf-8")
-    elif mode == "inline":
-        path.write_text(fig.to_html(full_html=True, include_plotlyjs="inline"), encoding="utf-8")
-    else:
-        # fallback: CDN (may be blocked in some environments)
-        path.write_text(fig.to_html(full_html=True, include_plotlyjs="cdn"), encoding="utf-8")
-
+def _write_html(fig: Any, path: Path) -> None:
+    """Write a fully self-contained Plotly HTML (no CDN, no external JS)."""
+    # "inline" embeds plotly.js + figure JSON into the HTML. This is the most robust
+    # format for GitHub Actions artifacts and offline viewing.
+    try:
+        # Prefer turntable rotation when a 3D scene exists (more readable than orbit).
+        fig.update_layout(scene=dict(dragmode="turntable"))
+    except Exception:
+        pass
+    path.write_text(fig.to_html(full_html=True, include_plotlyjs="inline"), encoding="utf-8")
 
 def _maybe_write_png(fig: Any, path: Path, *, scale: float = 2.0) -> bool:
     # Requires kaleido.
