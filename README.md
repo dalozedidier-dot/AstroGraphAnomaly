@@ -11,7 +11,12 @@ Dépôt orienté **workflow** (GitHub web + Colab) :
 ## Exécution recommandée (sans “editable install”)
 
 ### Colab
-Ouvrir `notebooks/colab_workflow.ipynb`.
+Ouvrir `notebooks/colab_workflow.ipynb` (smoke + run offline).
+
+Notebooks “à jour” (selon modules/workflows) :
+- `notebooks/colab_A_to_H_suite.ipynb` : génération galerie A→H (+ HR/CMD)
+- `notebooks/colab_region_pack_fast.ipynb` : tests rapides sur nouvelles zones (GalaxyCandidates / VariSummary)
+
 
 ### Local / Colab (repo root)
 ```bash
