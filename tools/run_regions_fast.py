@@ -21,7 +21,6 @@ import re
 
 import numpy as np
 import pandas as pd
-from jinja2 import Template
 import matplotlib.pyplot as plt
 
 from sklearn.decomposition import PCA
@@ -95,32 +94,30 @@ def knn_score(X_p: np.ndarray, k: int = 15) -> np.ndarray:
 
 
 def write_dashboard(out_dir: str, title: str, items: list[tuple[str, str]]) -> None:
-    tpl = Template("""
-<!doctype html>
+    lis = "\n".join([f'  <li><a href="{fn}">{label}</a></li>' for label, fn in items])
+    html = f"""<!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
-<title>{{ title }}</title>
+<title>{title}</title>
 <style>
-body { font-family: Arial, sans-serif; margin: 24px; }
-h1 { font-size: 22px; }
-ul { line-height: 1.8; }
-.small { color: #555; font-size: 12px; }
+body {{ font-family: Arial, sans-serif; margin: 24px; }}
+h1 {{ font-size: 22px; }}
+ul {{ line-height: 1.8; }}
+.small {{ color: #555; font-size: 12px; }}
 </style>
 </head>
 <body>
-<h1>{{ title }}</h1>
+<h1>{title}</h1>
 <p class="small">Pack fast. Pas de sky map sans ra/dec.</p>
 <ul>
-{% for label, fn in items %}
-  <li><a href="{{ fn }}">{{ label }}</a></li>
-{% endfor %}
+{lis}
 </ul>
 </body>
 </html>
-""")
+"""
     with open(os.path.join(out_dir, "index.html"), "w", encoding="utf-8") as f:
-        f.write(tpl.render(title=title, items=items))
+        f.write(html)
 
 
 def main() -> int:
@@ -128,9 +125,13 @@ def main() -> int:
     ap.add_argument("--kind", required=True, choices=["galaxy_candidates", "vari_summary"])
     ap.add_argument("--inputs", required=True)
     ap.add_argument("--out", required=True)
+    ap.add_argument("--max-regions", type=int, default=0, help="Process only the first N input chunks (0 = all)")
+    ap.add_argument("--max-rows", type=int, default=0, help="Limit rows per chunk (0 = all)")
     args = ap.parse_args()
 
     paths = sorted(glob.glob(args.inputs))
+    if args.max_regions and args.max_regions > 0:
+        paths = paths[: args.max_regions]
     if not paths:
         raise SystemExit(f"No files matched: {args.inputs}")
 
@@ -139,6 +140,8 @@ def main() -> int:
         m = re.search(r"_(\d{6}-\d{6})", os.path.basename(path))
         rid = m.group(1) if m else os.path.basename(path).replace(".csv.gz", "")
         df = read_ecsv_gz(path)
+        if args.max_rows and args.max_rows > 0:
+            df = df.head(args.max_rows)
         df["region_id"] = rid
         df["__source_file"] = os.path.basename(path)
         frames.append(df)

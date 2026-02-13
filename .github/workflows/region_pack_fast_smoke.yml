@@ -1,20 +1,15 @@
-name: region_pack_fast_smoke
+name: Region Pack Fast Smoke
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
   schedule:
-    # hebdo (UTC) : exécute sur les fixtures "zones" commitées
-    - cron: "37 3 * * 0"
-
-concurrency:
-  group: region-pack-fast-${{ github.ref }}
-  cancel-in-progress: true
+    # Mondays at 04:13 UTC
+    - cron: "13 4 * * 1"
 
 jobs:
-  region_pack_fast:
+  region-pack-fast:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-
+    timeout-minutes: 25
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -29,14 +24,18 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          pip install -r requirements_viz.txt
 
-      - name: Region Pack fast smoke (new zones)
+      - name: Run GalaxyCandidates (2 regions, 2000 rows each)
         run: |
-          python tools/ci_region_pack_fast_smoke.py --max-rows 6000 --top-k 120 --engine robust_zscore --out-root results/region_pack_fast_ci
+          python tools/run_regions_fast.py             --kind galaxy_candidates             --inputs "data/region_pack/raw/GalaxyCandidates_*.csv.gz"             --out "results/region_pack_fast/galaxy_candidates"             --max-regions 2             --max-rows 2000
 
-      - name: Upload artifacts
-        if: always()
+      - name: Run VariSummary (2 regions, 2000 rows each)
+        run: |
+          python tools/run_regions_fast.py             --kind vari_summary             --inputs "data/region_pack/raw/VariSummary_*.csv.gz"             --out "results/region_pack_fast/vari_summary"             --max-regions 2             --max-rows 2000
+
+      - name: Upload region pack artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: region_pack_fast_ci_results
-          path: results/region_pack_fast_ci
+          name: region_pack_fast_results
+          path: results/region_pack_fast

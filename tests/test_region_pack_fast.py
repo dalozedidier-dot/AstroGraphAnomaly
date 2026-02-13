@@ -1,65 +1,35 @@
-from __future__ import annotations
-
-from pathlib import Path
+import os
 import subprocess
+import sys
+from pathlib import Path
 
 
-def _run(cmd: list[str]) -> None:
-    subprocess.run(cmd, check=True)
+def test_region_pack_fast_smoke(tmp_path: Path) -> None:
+    # Minimal smoke on one provided region chunk (no network).
+    inp = Path("data/region_pack/raw/GalaxyCandidates_022411-022698.csv.gz")
+    assert inp.exists(), f"missing test input: {inp}"
 
+    out_dir = tmp_path / "region_fast"
+    cmd = [
+        sys.executable,
+        "tools/run_regions_fast.py",
+        "--kind",
+        "galaxy_candidates",
+        "--inputs",
+        str(inp),
+        "--out",
+        str(out_dir),
+        "--max-regions",
+        "1",
+        "--max-rows",
+        "1000",
+    ]
+    subprocess.check_call(cmd)
 
-def test_region_pack_fast_on_zone_fixtures(tmp_path: Path) -> None:
-    raw = Path("data/region_pack/raw")
-    assert raw.exists()
-
-    gc = raw / "GalaxyCandidates_014046-015369.csv.gz"
-    vs = raw / "VariSummary_012598-014045.csv.gz"
-    assert gc.exists()
-    assert vs.exists()
-
-    out_gc = tmp_path / "gc"
-    out_vs = tmp_path / "vs"
-
-    _run(
-        [
-            "python",
-            "tools/region_pack_fast.py",
-            "--kind",
-            "galaxy_candidates",
-            "--inputs",
-            str(gc),
-            "--out",
-            str(out_gc),
-            "--engine",
-            "robust_zscore",
-            "--top-k",
-            "25",
-            "--max-rows",
-            "1500",
-        ]
-    )
-    _run(
-        [
-            "python",
-            "tools/region_pack_fast.py",
-            "--kind",
-            "vari_summary",
-            "--inputs",
-            str(vs),
-            "--out",
-            str(out_vs),
-            "--engine",
-            "robust_zscore",
-            "--top-k",
-            "25",
-            "--max-rows",
-            "1500",
-        ]
-    )
-
-    assert (out_gc / "galaxy_candidates_scored_all.csv.gz").exists()
-    assert (out_vs / "vari_summary_scored_all.csv.gz").exists()
-
-    # one per-region output for each
-    assert list(out_gc.glob("region_*/scored.csv.gz"))
-    assert list(out_vs.glob("region_*/scored.csv.gz"))
+    # Expected outputs
+    assert (out_dir / "galaxy_candidates_scored_all.csv.gz").exists()
+    reg_dir = out_dir / "region_022411-022698"
+    assert (reg_dir / "scored.csv.gz").exists()
+    assert (reg_dir / "01_embedding_pca.png").exists()
+    assert (reg_dir / "summary.json").exists()
+    assert (reg_dir / "index.html").exists()
