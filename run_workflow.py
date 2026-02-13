@@ -31,7 +31,11 @@ def main():
     p.add_argument("--limit", type=int, default=2000)
     p.add_argument("--out", required=True)
 
-    p.add_argument("--engine", default="isolation_forest", choices=["isolation_forest","lof","ocsvm","robust_zscore","pineforest"])
+    p.add_argument(
+        "--engine",
+        default="isolation_forest",
+        choices=["isolation_forest", "lof", "ocsvm", "robust_zscore", "pineforest", "ensemble"],
+    )
     p.add_argument("--threshold-strategy", default="contamination", choices=["contamination","percentile","top_k","score"])
     p.add_argument("--contamination", type=float, default=0.05)
     p.add_argument("--percentile", type=float, default=95.0)
@@ -44,6 +48,29 @@ def main():
     p.add_argument("--explain-top", type=int, default=0)
     p.add_argument("--lime-num-features", type=int, default=8)
     p.add_argument("--seed", type=int, default=42)
+
+    # Ensemble options (used when --engine ensemble)
+    p.add_argument(
+        "--ensemble-engines",
+        default="isolation_forest,lof,ocsvm",
+        help="Comma-separated list of engines to combine (ensemble mode)",
+    )
+    p.add_argument(
+        "--ensemble-weights",
+        default="",
+        help="Weights override, e.g. 'isolation_forest=1,lof=1,ocsvm=1,graph=1.5' (ensemble mode)",
+    )
+    p.add_argument(
+        "--ensemble-no-graph-constraint",
+        action="store_true",
+        help="Disable the extra graph constraint (betweenness/articulation/bridge) in ensemble mode",
+    )
+    p.add_argument(
+        "--ensemble-graph-weight",
+        type=float,
+        default=1.5,
+        help="Weight for the graph constraint (ensemble mode)",
+    )
 
     a = p.parse_args()
 
@@ -64,6 +91,10 @@ def main():
         lime_num_features=a.lime_num_features,
         plots=a.plots,
         seed=a.seed,
+        ensemble_engines=a.ensemble_engines,
+        ensemble_weights=a.ensemble_weights,
+        ensemble_include_graph_constraint=(not bool(a.ensemble_no_graph_constraint)),
+        ensemble_graph_weight=float(a.ensemble_graph_weight),
     )
 
 if __name__ == "__main__":

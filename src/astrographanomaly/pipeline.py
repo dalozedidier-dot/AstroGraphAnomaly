@@ -5,6 +5,7 @@ from typing import Optional, Dict, Any
 
 import numpy as np
 import pandas as pd
+import networkx as nx
 from sklearn.preprocessing import StandardScaler
 
 from .data.csv import load_csv
@@ -14,6 +15,12 @@ from .detection.isoforest import fit_score_isolation_forest
 from .detection.lof import fit_score_lof
 from .detection.ocsvm import fit_score_ocsvm
 from .detection.robust import score_robust_zscore
+from .detection.ensemble import (
+    EnsembleConfig,
+    fit_score_ensemble,
+    parse_engines_csv,
+    parse_weights_csv,
+)
 from .thresholds import ThresholdConfig, label_anomalies
 from .reporting.io import write_outputs
 from .reporting.plots import save_basic_plots, save_graph_plot
@@ -56,6 +63,11 @@ def run_pipeline(
     lime_num_features: int = 8,
     plots: bool = False,
     seed: int = 42,
+    # ensemble scoring (engine="ensemble")
+    ensemble_engines: str = "isolation_forest,lof,ocsvm",
+    ensemble_weights: str = "",
+    ensemble_include_graph_constraint: bool = True,
+    ensemble_graph_weight: float = 1.5,
     # inputs
     in_csv: Optional[str] = None,
     ra: Optional[float] = None,
@@ -112,7 +124,29 @@ def run_pipeline(
     X_scaled = scaler.fit_transform(X)
 
     # 4) Scores + labels
-    scores = _fit_score_engine(X_scaled, engine=engine, contamination=contamination, seed=seed)
+    per_constraint_raw: Dict[str, np.ndarray] | None = None
+    per_constraint_phi: Dict[str, np.ndarray] | None = None
+    per_constraint_w: Dict[str, float] | None = None
+
+    if engine == "ensemble":
+        engines = parse_engines_csv(ensemble_engines) or ["isolation_forest", "lof", "ocsvm"]
+        weights = parse_weights_csv(ensemble_weights)
+        cfg = EnsembleConfig(
+            engines=engines,
+            weights=weights,
+            include_graph_constraint=bool(ensemble_include_graph_constraint),
+            graph_weight=float(ensemble_graph_weight),
+        )
+        scores, per_constraint_raw, per_constraint_phi, per_constraint_w = fit_score_ensemble(
+            X_scaled=X_scaled,
+            X_unscaled=X,
+            feature_names=feature_names,
+            contamination=float(contamination),
+            seed=int(seed),
+            cfg=cfg,
+        )
+    else:
+        scores = _fit_score_engine(X_scaled, engine=engine, contamination=contamination, seed=seed)
 
     thr_cfg = ThresholdConfig(
         strategy=threshold_strategy,
@@ -124,7 +158,34 @@ def run_pipeline(
     labels = label_anomalies(scores, thr_cfg)
 
     df_scored = pd.DataFrame({"source_id": node_list, "anomaly_score": scores, "anomaly_label": labels})
+    if engine == "ensemble" and per_constraint_raw is not None and per_constraint_phi is not None:
+        # Keep the contract stable: anomaly_score is the composite score.
+        df_scored["incoherence_score"] = df_scored["anomaly_score"]
+
+        # Add per-constraint columns (raw + normalized phi).
+        for name, arr in per_constraint_raw.items():
+            col = f"score_{name}"
+            df_scored[col] = np.asarray(arr, dtype=float)
+        for name, arr in per_constraint_phi.items():
+            col = f"phi_{name}"
+            df_scored[col] = np.asarray(arr, dtype=float)
     df_scored = df_raw.merge(df_scored, on="source_id", how="left")
+
+    # Propagate anomaly fields into graph attributes for GraphML export.
+    try:
+        score_attr = {int(r["source_id"]): float(r["anomaly_score"]) for _, r in df_scored.iterrows()}
+        label_attr = {int(r["source_id"]): int(r["anomaly_label"]) for _, r in df_scored.iterrows()}
+        nx.set_node_attributes(G, score_attr, "anomaly_score")
+        nx.set_node_attributes(G, label_attr, "anomaly_label")
+
+        if engine == "ensemble" and per_constraint_raw is not None and per_constraint_phi is not None:
+            for name, arr in per_constraint_raw.items():
+                nx.set_node_attributes(G, {int(sid): float(arr[i]) for i, sid in enumerate(node_list)}, f"score_{name}")
+            for name, arr in per_constraint_phi.items():
+                nx.set_node_attributes(G, {int(sid): float(arr[i]) for i, sid in enumerate(node_list)}, f"phi_{name}")
+    except Exception:
+        # GraphML export remains valid even if attribute propagation fails.
+        pass
 
     # Top anomalies (by score desc)
     df_top = df_scored.sort_values("anomaly_score", ascending=False).head(int(top_k)).copy()
@@ -180,9 +241,25 @@ def run_pipeline(
                     "feature_snapshot": snap,
                     "lime": lime_payload,
                 }
+
+                if engine == "ensemble" and per_constraint_raw is not None and per_constraint_phi is not None and per_constraint_w is not None:
+                    constraints: Dict[str, Any] = {}
+                    for name, raw_arr in per_constraint_raw.items():
+                        phi_arr = per_constraint_phi.get(name)
+                        if phi_arr is None:
+                            continue
+                        constraints[name] = {
+                            "weight": float(per_constraint_w.get(name, 1.0)),
+                            "raw_score": float(raw_arr[idx]),
+                            "phi": float(phi_arr[idx]),
+                        }
+                    payload["incoherence_score"] = float(scores[idx])
+                    payload["constraints"] = constraints
+                    payload["ensemble_engines"] = list(parse_engines_csv(ensemble_engines) or [])
                 fexp.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
-                prompt = build_prompt(payload, template_name="default")
+                prompt_template = "composite" if engine == "ensemble" else "default"
+                prompt = build_prompt(payload, template_name=prompt_template)
                 fprm.write(json.dumps({"source_id": sid, "prompt": prompt}, ensure_ascii=False) + "\n")
 
         explanations_path = str(exp_out)
@@ -226,6 +303,14 @@ def run_pipeline(
         seed=seed,
         inputs=dict(in_csv=in_csv, ra=ra, dec=dec, radius_deg=radius_deg, limit=limit),
     )
+
+    if engine == "ensemble":
+        config["ensemble"] = dict(
+            engines=parse_engines_csv(ensemble_engines),
+            weights=parse_weights_csv(ensemble_weights),
+            include_graph_constraint=bool(ensemble_include_graph_constraint),
+            graph_weight=float(ensemble_graph_weight),
+        )
     write_manifest(out_dir, config=config, artefacts=artefacts)
 
     return {
