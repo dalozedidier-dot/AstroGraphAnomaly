@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import hashlib
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -43,9 +44,11 @@ except Exception:
 
 try:
     import plotly.graph_objects as go  # type: ignore
+    from plotly.offline import plot as plotly_plot  # type: ignore
     _HAS_PLOTLY = True
 except Exception:
     go = None
+    plotly_plot = None
     _HAS_PLOTLY = False
 
 try:
@@ -86,34 +89,6 @@ def robust_unit_interval(x: np.ndarray) -> np.ndarray:
     return y
 
 
-
-# --- Offline HTML helpers -------------------------------------------------
-# Generated HTML must be 100% offline: Plotly.js is inlined (no CDN).
-# We also optionally export static PNG snapshots via Kaleido if installed.
-
-def write_plotly_html(fig, out_html: Path) -> None:
-    if not _HAS_PLOTLY:
-        out_html.write_text("Plotly not installed. Install requirements_viz.txt.", encoding="utf-8")
-        return
-    import plotly.io as pio  # type: ignore
-
-    config = dict(responsive=True, displayModeBar=True)
-    pio.write_html(
-        fig,
-        file=str(out_html),
-        include_plotlyjs=True,
-        full_html=True,
-        auto_open=False,
-        config=config,
-    )
-
-def maybe_write_plotly_png(fig, out_png: Path, width: int = 1400, height: int = 900) -> None:
-    try:
-        fig.write_image(str(out_png), width=width, height=height, scale=2)
-    except Exception:
-        return
-
-
 def robust_z(x: np.ndarray) -> np.ndarray:
     x = np.asarray(x, dtype=float)
     x = np.where(np.isfinite(x), x, np.nan)
@@ -134,17 +109,22 @@ def ensure_core(df: pd.DataFrame) -> pd.DataFrame:
     df["anomaly_score"] = pd.to_numeric(df["anomaly_score"], errors="coerce").fillna(0.0)
 
     if "anomaly_label" not in df.columns:
-        thr = np.nanpercentile(df["anomaly_score"].to_numpy(dtype=float, copy=True), 95)
-        df["anomaly_label"] = np.where(df["anomaly_score"].to_numpy(dtype=float, copy=True) >= thr, -1, 1)
+        thr = np.nanpercentile(df["anomaly_score"].to_numpy(float), 95)
+        df["anomaly_label"] = np.where(df["anomaly_score"].to_numpy(float) >= thr, -1, 1)
 
-    s = df["anomaly_score"].to_numpy(dtype=float, copy=True)
+    s = df["anomaly_score"].to_numpy(float)
     y = df["anomaly_label"].to_numpy(int)
     if np.mean(s[y == -1]) < np.mean(s[y == 1]):
         df["anomaly_score_hi"] = -df["anomaly_score"]
     else:
         df["anomaly_score_hi"] = df["anomaly_score"]
 
-    df["anomaly_score_norm"] = robust_unit_interval(df["anomaly_score_hi"].to_numpy(dtype=float, copy=True))
+    df["anomaly_score_norm"] = robust_unit_interval(df["anomaly_score_hi"].to_numpy(float))
+
+    # Optional: composite incoherence score normalization for multi-constraint viz
+    if "incoherence_score" in df.columns:
+        df["incoherence_score"] = pd.to_numeric(df["incoherence_score"], errors="coerce").fillna(0.0)
+        df["incoherence_score_norm"] = robust_unit_interval(df["incoherence_score"].to_numpy(float))
 
     if "distance" not in df.columns and "parallax" in df.columns:
         par = pd.to_numeric(df["parallax"], errors="coerce")
@@ -262,9 +242,9 @@ def plot_hidden_constellations(df: pd.DataFrame, G_opt, out_png: Path) -> None:
         plt.close(fig)
         return
 
-    ra = pd.to_numeric(df["ra"], errors="coerce").fillna(0.0).to_numpy(dtype=float, copy=True)
-    dec = pd.to_numeric(df["dec"], errors="coerce").fillna(0.0).to_numpy(dtype=float, copy=True)
-    score = df["anomaly_score_norm"].to_numpy(dtype=float, copy=True)
+    ra = pd.to_numeric(df["ra"], errors="coerce").fillna(0.0).to_numpy(float)
+    dec = pd.to_numeric(df["dec"], errors="coerce").fillna(0.0).to_numpy(float)
+    score = df["anomaly_score_norm"].to_numpy(float)
 
     bins = 320
     xedges = np.linspace(np.nanmin(ra), np.nanmax(ra), bins+1)
@@ -330,14 +310,14 @@ def export_celestial_sphere(df: pd.DataFrame, out_html: Path) -> None:
         out_html.write_text("Missing ra/dec in scored.csv", encoding="utf-8")
         return
 
-    ra = np.deg2rad(pd.to_numeric(df["ra"], errors="coerce").fillna(0.0).to_numpy(dtype=float, copy=True))
-    dec = np.deg2rad(pd.to_numeric(df["dec"], errors="coerce").fillna(0.0).to_numpy(dtype=float, copy=True))
+    ra = np.deg2rad(pd.to_numeric(df["ra"], errors="coerce").fillna(0.0).to_numpy(float))
+    dec = np.deg2rad(pd.to_numeric(df["dec"], errors="coerce").fillna(0.0).to_numpy(float))
 
     x = np.cos(dec) * np.cos(ra)
     y = np.cos(dec) * np.sin(ra)
     z = np.sin(dec)
 
-    score = df["anomaly_score_norm"].to_numpy(dtype=float, copy=True)
+    score = df["anomaly_score_norm"].to_numpy(float)
     size = 3 + 10*score
 
     hover_cols = [c for c in ["source_id","anomaly_score_hi","phot_g_mean_mag","bp_rp","parallax","pmra","pmdec","ruwe"] if c in df.columns]
@@ -354,222 +334,288 @@ def export_celestial_sphere(df: pd.DataFrame, out_html: Path) -> None:
         scene=dict(xaxis=dict(visible=False), yaxis=dict(visible=False), zaxis=dict(visible=False), aspectmode="data"),
         margin=dict(l=0, r=0, b=0, t=40),
     )
-    write_plotly_html(fig, out_html)
-    maybe_write_plotly_png(fig, out_html.with_suffix(".png"))
+    plotly_plot(fig, filename=str(out_html), auto_open=False, include_plotlyjs="cdn")
 
 
-def export_network_explorer(df: pd.DataFrame, G_opt, out_html: Path) -> None:
-    """Export an *offline* interactive network explorer.
 
-    Preferred backend is PyVis only when it can embed resources inline.
-    If PyVis is missing or generates HTML with external dependencies (node_modules/CDN),
-    we fall back to a fully self-contained Plotly (inline) explorer.
+def parse_weights(spec: str) -> Dict[str, float]:
+    """Parse weights like: "isolation_forest=1,lof=1,ocsvm=1,graph=2.0"."""
+    out: Dict[str, float] = {}
+    spec = (spec or "").strip()
+    if not spec:
+        return out
+    for part in spec.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "=" not in part:
+            continue
+        k, v = part.split("=", 1)
+        k = k.strip()
+        try:
+            out[k] = float(v.strip())
+        except Exception:
+            continue
+    return out
+
+
+def _stable_color_from_name(name: str) -> Tuple[int, int, int]:
+    """Deterministic pseudo-random color from a string, avoiding very dark values."""
+    h = hashlib.sha1(name.encode("utf-8")).hexdigest()
+    r = 80 + (int(h[0:2], 16) % 176)
+    g = 80 + (int(h[2:4], 16) % 176)
+    b = 80 + (int(h[4:6], 16) % 176)
+    return int(r), int(g), int(b)
+
+
+def constraint_base_rgb(name: str) -> Tuple[int, int, int]:
+    """Palette for constraint/engine names. Unknown names get a stable hashed color."""
+    n = (name or "").lower()
+    palette = {
+        "isolation_forest": (230, 70, 70),   # red
+        "lof": (80, 210, 120),               # green
+        "ocsvm": (80, 140, 230),             # blue
+        "robust_zscore": (210, 90, 210),     # magenta
+        "pineforest": (80, 210, 210),        # cyan
+        "graph": (240, 220, 60),             # yellow
+    }
+    return palette.get(n, _stable_color_from_name(name))
+
+
+def mix_rgb(a: Tuple[int, int, int], b: Tuple[int, int, int], t: float) -> Tuple[int, int, int]:
+    t = float(max(0.0, min(1.0, t)))
+    return (
+        int(round(a[0] * (1 - t) + b[0] * t)),
+        int(round(a[1] * (1 - t) + b[1] * t)),
+        int(round(a[2] * (1 - t) + b[2] * t)),
+    )
+
+
+def rgb_str(rgb: Tuple[int, int, int]) -> str:
+    r, g, b = rgb
+    r = int(max(0, min(255, r)))
+    g = int(max(0, min(255, g)))
+    b = int(max(0, min(255, b)))
+    return f"rgb({r},{g},{b})"
+
+
+def export_network_explorer(
+    df: pd.DataFrame,
+    G_opt,
+    out_html: Path,
+    *,
+    color_mode: str = "auto",
+    phi_prefix: str = "phi_",
+    phi_weights: str = "",
+    phi_active_threshold: float = 0.65,
+    max_nodes: int = 1200,
+    score_col: str = "",
+) -> None:
+    """Interactive network explorer (PyVis).
+
+    color_mode:
+      - "score": single score gradient (default legacy look)
+      - "dominant": color by dominant constraint, intensity by score
+      - "blend": blend multiple constraints into one mixed color, intensity by score
+      - "border_dominant": background by score, border by dominant constraint, border width by #active constraints
+      - "auto": if phi_* columns exist -> "border_dominant" else "score"
     """
-
+    if not _HAS_PYVIS:
+        out_html.write_text("PyVis not installed. Install requirements_viz.txt.", encoding="utf-8")
+        return
     if G_opt is None:
         out_html.write_text("No graph provided (graph_full/union.graphml).", encoding="utf-8")
         return
 
     G = G_opt
-    nodes_keep, edges_keep = sample_subgraph(G, df, max_nodes=1200)
+    nodes_keep, edges_keep = sample_subgraph(G, df, max_nodes=int(max_nodes))
 
     d = df.copy()
     if "source_id" not in d.columns:
         d["source_id"] = d.index.astype(str)
+    d["source_id"] = d["source_id"].astype(str)
     d = d.set_index("source_id", drop=False)
 
-    # ---------- Try PyVis (only if truly offline) ----------
-    if _HAS_PYVIS:
-        try:
-            net = Network(
-                height="820px",
-                width="100%",
-                bgcolor="#05060a",
-                font_color="#e8e8e8",
-                directed=False,
-                cdn_resources="in_line",
-            )
-            net.force_atlas_2based(
-                gravity=-30,
-                central_gravity=0.01,
-                spring_length=110,
-                spring_strength=0.08,
-                damping=0.4,
-            )
+    # Detect phi columns for multi-constraint color
+    phi_prefix = (phi_prefix or "phi_").strip()
+    phi_cols = [c for c in d.columns if isinstance(c, str) and c.startswith(phi_prefix)]
+    w_map = parse_weights(phi_weights)
+    if phi_cols and color_mode == "auto":
+        color_mode = "border_dominant"
+    if not phi_cols and color_mode == "auto":
+        color_mode = "score"
 
-            for sid in nodes_keep:
-                row = d.loc[sid] if sid in d.index else None
-                sc = float(row["anomaly_score_norm"]) if row is not None and "anomaly_score_norm" in row else 0.2
-                size = 10 + 30 * sc
-                label = sid if sc > 0.92 else ""
-                title_parts = []
-                if row is not None:
-                    cols = [
-                        "source_id",
-                        "anomaly_score_hi",
-                        "phot_g_mean_mag",
-                        "bp_rp",
-                        "parallax",
-                        "pmra",
-                        "pmdec",
-                        "ruwe",
-                        "degree",
-                        "kcore",
-                        "betweenness",
-                    ]
-                    for c in cols:
-                        if c in row.index:
-                            title_parts.append(f"{c}: {row[c]}")
-                title = "<br>".join(title_parts) if title_parts else sid
+    # Score column selection for intensity
+    if score_col:
+        score_col = score_col.strip()
+    if not score_col:
+        score_col = "incoherence_score_norm" if "incoherence_score_norm" in d.columns else "anomaly_score_norm"
+    if score_col not in d.columns:
+        score_col = "anomaly_score_norm" if "anomaly_score_norm" in d.columns else ""
 
-                r = int(40 + 215 * sc)
-                g = int(80 + 150 * sc)
-                b = int(220 - 160 * sc)
-                color = f"rgb({r},{g},{b})"
-                net.add_node(sid, label=label, title=title, value=size, color=color)
-
-            for u, v in edges_keep:
-                net.add_edge(u, v, value=1)
-
-            # Save to temp, then validate offline-ness
-            tmp_html = out_html.with_suffix(".pyvis.tmp.html")
-            net.save_graph(str(tmp_html))
-
-            txt = tmp_html.read_text(encoding="utf-8", errors="ignore").lower()
-            # If pyvis couldn't inline resources (older versions), it often references node_modules or CDNs.
-            bad = (
-                ("node_modules" in txt)
-                or ("cdn.jsdelivr" in txt)
-                or ("cdnjs" in txt)
-                or ("unpkg" in txt)
-                or ("<script" in txt and "src=" in txt)  # external script tags
-            )
-
-            if not bad:
-                # Great: keep PyVis version
-                tmp_html.replace(out_html)
-                return
-
-            # Otherwise discard and fall back to Plotly
-            try:
-                tmp_html.unlink()
-            except Exception:
-                pass
-
-        except TypeError:
-            # PyVis too old (no cdn_resources arg) -> fall back to Plotly
-            pass
-        except Exception:
-            # Any other PyVis failure -> fall back to Plotly
-            pass
-
-    # ---------- Plotly fallback (guaranteed offline) ----------
-    # Use existing node x/y if present, else fall back to spring layout for a smaller sample.
+    # Make HTML self-contained when possible
     try:
-        import plotly.graph_objects as go
-        import plotly.io as pio
-    except Exception:
-        out_html.write_text("Plotly not installed. Install requirements_viz.txt.", encoding="utf-8")
-        return
+        net = Network(
+            height="820px",
+            width="100%",
+            bgcolor="#05060a",
+            font_color="#e8e8e8",
+            directed=False,
+            cdn_resources="in_line",
+        )
+    except TypeError:
+        net = Network(height="820px", width="100%", bgcolor="#05060a", font_color="#e8e8e8", directed=False)
 
-    # Positions
-    pos_x = {}
-    pos_y = {}
-    for sid in nodes_keep:
-        if sid in G.nodes:
-            nd = G.nodes[sid]
-            if "x" in nd and "y" in nd:
-                try:
-                    pos_x[sid] = float(nd["x"])
-                    pos_y[sid] = float(nd["y"])
-                except Exception:
-                    pass
+    net.force_atlas_2based(gravity=-30, central_gravity=0.01, spring_length=110, spring_strength=0.08, damping=0.4)
 
-    if len(pos_x) < max(10, int(0.3 * len(nodes_keep))):
-        # If x/y are not available for most nodes, use spring layout on a smaller set
-        sub = G.subgraph(list(nodes_keep)).copy()
-        keep_small = list(sub.nodes())[:400]
-        sub = sub.subgraph(keep_small).copy()
-        layout = nx.spring_layout(sub, seed=0, k=None, iterations=50)
-        nodes_keep = set(sub.nodes())
-        edges_keep = [(u, v) for (u, v) in edges_keep if (u in nodes_keep and v in nodes_keep)]
-        pos_x = {k: float(v[0]) for k, v in layout.items()}
-        pos_y = {k: float(v[1]) for k, v in layout.items()}
-
-    # Edge trace
-    ex = []
-    ey = []
-    for u, v in edges_keep:
-        if u in pos_x and v in pos_x:
-            ex += [pos_x[u], pos_x[v], None]
-            ey += [pos_y[u], pos_y[v], None]
-
-    edge_trace = go.Scattergl(
-        x=ex,
-        y=ey,
-        mode="lines",
-        line=dict(width=0.6, color="rgba(180,180,200,0.25)"),
-        hoverinfo="none",
-        name="edges",
-    )
-
-    # Node trace
-    xs = []
-    ys = []
-    sizes = []
-    texts = []
-    colors = []
+    dark_bg = (18, 20, 30)
+    # legacy gradient anchors: low -> blue, high -> yellow
+    low_rgb = (45, 95, 220)
+    hi_rgb = (245, 220, 60)
 
     for sid in nodes_keep:
-        if sid not in pos_x:
-            continue
         row = d.loc[sid] if sid in d.index else None
-        sc = float(row["anomaly_score_norm"]) if row is not None and "anomaly_score_norm" in row else 0.2
-        size = 6 + 18 * sc
 
-        title_parts = [f"source_id: {sid}", f"anomaly_score_norm: {sc:.4f}"]
+        sc = 0.2
+        if row is not None and score_col and score_col in row.index:
+            try:
+                sc = float(row[score_col])
+            except Exception:
+                sc = 0.2
+        sc = float(max(0.0, min(1.0, sc)))
+
+        # label only very high score to avoid clutter
+        label = sid if sc > 0.92 else ""
+        size = 10 + 30 * sc
+
+        title_parts: List[str] = []
         if row is not None:
-            for c in ["phot_g_mean_mag", "bp_rp", "parallax", "pmra", "pmdec", "ruwe", "degree", "kcore", "betweenness"]:
+            cols = [
+                "source_id",
+                "anomaly_score",
+                "anomaly_score_hi",
+                "incoherence_score",
+                "phot_g_mean_mag",
+                "bp_rp",
+                "parallax",
+                "pmra",
+                "pmdec",
+                "ruwe",
+                "degree",
+                "kcore",
+                "betweenness",
+                "community_id",
+            ]
+            for c in cols:
                 if c in row.index:
                     title_parts.append(f"{c}: {row[c]}")
-        title = "<br>".join(title_parts)
 
-        xs.append(pos_x[sid])
-        ys.append(pos_y[sid])
-        sizes.append(size)
-        texts.append(title)
+            if phi_cols:
+                contribs: List[Tuple[str, float, float]] = []
+                for c in phi_cols:
+                    name = c[len(phi_prefix):]
+                    try:
+                        phi = float(row[c])
+                    except Exception:
+                        phi = 0.0
+                    phi = float(max(0.0, min(1.0, phi)))
+                    w = float(w_map.get(name, 1.0))
+                    contribs.append((name, w, w * phi))
+                contribs.sort(key=lambda t: t[2], reverse=True)
+                top = contribs[:6]
+                title_parts.append("constraints:")
+                for name, w, wp in top:
+                    title_parts.append(f"  {name}: w={w:.3g} contrib={wp:.3g}")
 
-        # Color ramp based on anomaly score
-        r = int(50 + 205 * sc)
-        g = int(90 + 130 * sc)
-        b = int(230 - 170 * sc)
-        colors.append(f"rgb({r},{g},{b})")
+        title = "<br>".join(title_parts) if title_parts else sid
 
-    node_trace = go.Scattergl(
-        x=xs,
-        y=ys,
-        mode="markers",
-        marker=dict(size=sizes, color=colors, opacity=0.9),
-        text=texts,
-        hoverinfo="text",
-        name="nodes",
-    )
+        # Compute dominant constraint + blended color
+        dominant_name = ""
+        active_cnt = 0
+        blend_vec = np.zeros(3, dtype=float)
+        total_contrib = 0.0
 
-    fig = go.Figure(data=[edge_trace, node_trace])
-    fig.update_layout(
-        title="Network Explorer (offline)",
-        paper_bgcolor="#05060a",
-        plot_bgcolor="#05060a",
-        font=dict(color="#e8e8e8"),
-        margin=dict(l=10, r=10, t=50, b=10),
-        xaxis=dict(showgrid=False, zeroline=False, visible=False),
-        yaxis=dict(showgrid=False, zeroline=False, visible=False),
-        showlegend=False,
-        height=820,
-    )
+        if row is not None and phi_cols:
+            for c in phi_cols:
+                name = c[len(phi_prefix):]
+                try:
+                    phi = float(row[c])
+                except Exception:
+                    phi = 0.0
+                phi = float(max(0.0, min(1.0, phi)))
+                w = float(w_map.get(name, 1.0))
+                contrib = w * phi
+                if phi >= float(phi_active_threshold):
+                    active_cnt += 1
+                if contrib > total_contrib:
+                    pass
+                rgb = np.array(constraint_base_rgb(name), dtype=float)
+                blend_vec += contrib * rgb
+                total_contrib += contrib
 
-    html = pio.to_html(fig, full_html=True, include_plotlyjs="inline")
-    out_html.write_text(html, encoding="utf-8")
+            # dominant constraint for border or categorical mode
+            best = None
+            best_val = -1.0
+            for c in phi_cols:
+                name = c[len(phi_prefix):]
+                try:
+                    phi = float(row[c])
+                except Exception:
+                    phi = 0.0
+                phi = float(max(0.0, min(1.0, phi)))
+                w = float(w_map.get(name, 1.0))
+                v = w * phi
+                if v > best_val:
+                    best_val = v
+                    best = name
+            dominant_name = best or ""
+
+        # Default score gradient (legacy look)
+        score_rgb = mix_rgb(low_rgb, hi_rgb, sc)
+
+        if color_mode == "score" or not phi_cols:
+            node_color = rgb_str(score_rgb)
+            net.add_node(sid, label=label, title=title, value=size, color=node_color)
+            continue
+
+        if color_mode == "dominant":
+            base = constraint_base_rgb(dominant_name or "graph")
+            bg = mix_rgb(dark_bg, base, sc)
+            net.add_node(sid, label=label, title=title, value=size, color=rgb_str(bg))
+            continue
+
+        if color_mode == "blend":
+            if total_contrib <= 1e-12:
+                mixed = score_rgb
+            else:
+                mixed = (blend_vec / total_contrib).clip(0, 255)
+                mixed = tuple(int(round(x)) for x in mixed.tolist())
+            bg = mix_rgb(dark_bg, mixed, sc)
+            net.add_node(sid, label=label, title=title, value=size, color=rgb_str(bg))
+            continue
+
+        if color_mode == "border_dominant":
+            border = rgb_str(constraint_base_rgb(dominant_name or "graph"))
+            background = rgb_str(score_rgb)
+            bw = 1 + 2 * int(min(3, max(0, active_cnt)))
+            net.add_node(
+                sid,
+                label=label,
+                title=title,
+                value=size,
+                color={"background": background, "border": border},
+                borderWidth=bw,
+                borderWidthSelected=max(3, bw),
+            )
+            continue
+
+        # fallback
+        net.add_node(sid, label=label, title=title, value=size, color=rgb_str(score_rgb))
+
+    for u, v in edges_keep:
+        net.add_edge(u, v, value=1)
+
+    net.save_graph(str(out_html))
 
 
 def load_lime_matrix(explain_jsonl: Path, top_ids: List[str]) -> Optional[Tuple[List[str], List[str], np.ndarray]]:
@@ -635,7 +681,7 @@ def plot_explainability_heatmap(df: pd.DataFrame, explain_jsonl: Optional[Path],
         num_cols = [c for c in d.columns if pd.api.types.is_numeric_dtype(d[c]) and c not in ("anomaly_label",)]
         preferred = [c for c in ["phot_g_mean_mag","bp_rp","parallax","pmra","pmdec","distance","ruwe","degree","kcore","betweenness"] if c in num_cols]
         cols = preferred if len(preferred) >= 6 else num_cols[:12]
-        Z = np.vstack([robust_z(pd.to_numeric(d[c], errors="coerce").fillna(0.0).to_numpy(dtype=float, copy=True)) for c in cols]).T
+        Z = np.vstack([robust_z(pd.to_numeric(d[c], errors="coerce").fillna(0.0).to_numpy(float)) for c in cols]).T
         title = "Explainability heatmap (fallback: robust z-scores)"
         data = Z
         ylabels = top_ids
@@ -669,7 +715,7 @@ def plot_feature_interaction_heatmap(df: pd.DataFrame, out_png: Path) -> None:
         return
 
     X = df[cols].apply(pd.to_numeric, errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0)
-    C = X.corr(method="spearman").to_numpy(dtype=float, copy=True)
+    C = X.corr(method="spearman").to_numpy(float)
 
     fig = plt.figure(figsize=(10, 8))
     ax = plt.gca()
@@ -694,11 +740,11 @@ def export_proper_motion_trails(df: pd.DataFrame, out_gif: Path, top_k: int = 30
         return
 
     d = df.sort_values("anomaly_score_hi", ascending=False).head(min(top_k, len(df))).copy()
-    ra0 = pd.to_numeric(d["ra"], errors="coerce").fillna(0.0).to_numpy(dtype=float, copy=True)
-    dec0 = pd.to_numeric(d["dec"], errors="coerce").fillna(0.0).to_numpy(dtype=float, copy=True)
-    pmra = pd.to_numeric(d["pmra"], errors="coerce").fillna(0.0).to_numpy(dtype=float, copy=True)
-    pmdec = pd.to_numeric(d["pmdec"], errors="coerce").fillna(0.0).to_numpy(dtype=float, copy=True)
-    score = d["anomaly_score_norm"].to_numpy(dtype=float, copy=True)
+    ra0 = pd.to_numeric(d["ra"], errors="coerce").fillna(0.0).to_numpy(float)
+    dec0 = pd.to_numeric(d["dec"], errors="coerce").fillna(0.0).to_numpy(float)
+    pmra = pd.to_numeric(d["pmra"], errors="coerce").fillna(0.0).to_numpy(float)
+    pmdec = pd.to_numeric(d["pmdec"], errors="coerce").fillna(0.0).to_numpy(float)
+    score = d["anomaly_score_norm"].to_numpy(float)
 
     mas2deg = 1.0 / 3.6e6
     cosd = np.cos(np.deg2rad(np.clip(dec0, -89.9, 89.9)))
@@ -729,22 +775,8 @@ def export_proper_motion_trails(df: pd.DataFrame, out_gif: Path, top_k: int = 30
         ax.set_ylabel("Dec [deg]")
         ax.grid(alpha=0.15)
         fig.canvas.draw()
-        w, h = fig.canvas.get_width_height()
-
-        # Matplotlib >= 3.8: FigureCanvasAgg no longer exposes tostring_rgb().
-        # Use buffer_rgba() and drop alpha, with fallbacks for older versions.
-        try:
-            buf = np.frombuffer(fig.canvas.buffer_rgba(), dtype=np.uint8)
-            img = buf.reshape((h, w, 4))[:, :, :3].copy()
-        except Exception:
-            try:
-                buf = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
-                img = buf.reshape((h, w, 3))
-            except Exception:
-                buf = np.frombuffer(fig.canvas.tostring_argb(), dtype=np.uint8)
-                argb = buf.reshape((h, w, 4))
-                img = argb[:, :, 1:4].copy()
-
+        img = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
+        img = img.reshape(fig.canvas.get_width_height()[::-1] + (3,))
         imgs.append(img)
         plt.close(fig)
 
@@ -768,7 +800,7 @@ def export_feature_biocubes(df: pd.DataFrame, out_html: Path) -> None:
         return
 
     def stats(d: pd.DataFrame, col: str):
-        x = pd.to_numeric(d[col], errors="coerce").replace([np.inf, -np.inf], np.nan).dropna().to_numpy(dtype=float, copy=True)
+        x = pd.to_numeric(d[col], errors="coerce").replace([np.inf, -np.inf], np.nan).dropna().to_numpy(float)
         if x.size == 0:
             return 0.0, 0.0, 0.0
         q1, med, q3 = np.percentile(x, [25, 50, 75])
@@ -804,8 +836,7 @@ def export_feature_biocubes(df: pd.DataFrame, out_html: Path) -> None:
         margin=dict(l=0, r=0, b=0, t=40),
         showlegend=False
     )
-    write_plotly_html(fig, out_html)
-    maybe_write_plotly_png(fig, out_html.with_suffix(".png"))
+    plotly_plot(fig, filename=str(out_html), auto_open=False, include_plotlyjs="cdn")
 
 
 def export_umap(df: pd.DataFrame, out_png: Path, out_html: Path) -> None:
@@ -822,9 +853,7 @@ def export_umap(df: pd.DataFrame, out_png: Path, out_html: Path) -> None:
         out_html.write_text("Not enough numeric columns for UMAP", encoding="utf-8")
         return
 
-    X = df[cols].apply(pd.to_numeric, errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0).to_numpy(dtype=float, copy=True)
-    if not X.flags.writeable:
-        X = X.copy()
+    X = df[cols].apply(pd.to_numeric, errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0).to_numpy(float)
     for j in range(X.shape[1]):
         X[:, j] = robust_z(X[:, j])
 
@@ -835,7 +864,7 @@ def export_umap(df: pd.DataFrame, out_png: Path, out_html: Path) -> None:
         U, S, _ = np.linalg.svd(X, full_matrices=False)
         emb = U[:, :2] * S[:2]
 
-    score = df["anomaly_score_norm"].to_numpy(dtype=float, copy=True)
+    score = df["anomaly_score_norm"].to_numpy(float)
     fig = plt.figure(figsize=(10, 8))
     plt.scatter(emb[:, 0], emb[:, 1], s=18, alpha=0.78, c=score)
     plt.title("Cosmic cloud embedding (UMAP if available)")
@@ -855,7 +884,7 @@ def export_umap(df: pd.DataFrame, out_png: Path, out_html: Path) -> None:
             text=hover
         )])
         fig2.update_layout(title="UMAP cosmic cloud (interactive)", margin=dict(l=0, r=0, b=0, t=40))
-        write_plotly_html(fig2, out_html)
+        plotly_plot(fig2, filename=str(out_html), auto_open=False, include_plotlyjs="cdn")
     else:
         out_html.write_text("Plotly not installed. Install requirements_viz.txt.", encoding="utf-8")
 
@@ -879,7 +908,6 @@ def export_dashboard(out_dir: Path) -> None:
 </head>
 <body>
 <h1>AstroGraphAnomaly — A→H Gallery</h1>
-<p>All interactive HTML is generated fully offline (Plotly.js inlined). Open this folder locally, no CDN required.</p>
 <div class="links">
   <a href="{rel(out_dir/'02_celestial_sphere_3d.html')}">B) Celestial Sphere 3D</a>
   <a href="{rel(out_dir/'03_network_explorer.html')}">C) Network Explorer</a>
@@ -908,7 +936,21 @@ def parse_args():
     ap.add_argument("--scored", required=True, help="Path to scored.csv")
     ap.add_argument("--graph", default="", help="Path to graph graphml (optional). If empty, auto-detect in run-dir.")
     ap.add_argument("--explain", default="", help="Path to explanations.jsonl (optional)")
+
+    # Network explorer options (C)
+    ap.add_argument("--network-color-mode", default="auto",
+                    choices=["auto", "score", "dominant", "blend", "border_dominant"],
+                    help="Color encoding for the interactive network explorer.")
+    ap.add_argument("--network-phi-prefix", default="phi_", help="Prefix for per-constraint columns (ex: phi_lof).")
+    ap.add_argument("--network-phi-weights", default="",
+                    help="Weights like: isolation_forest=1,lof=1,ocsvm=1,graph=2.0")
+    ap.add_argument("--network-phi-active-threshold", type=float, default=0.65,
+                    help="phi >= threshold counts as 'active constraint' (used for border width in border_dominant).")
+    ap.add_argument("--network-max-nodes", type=int, default=1200, help="Max nodes in PyVis explorer (sampling applied).")
+    ap.add_argument("--network-score-col", default="",
+                    help="Optional score column used for intensity. Defaults to incoherence_score_norm then anomaly_score_norm.")
     return ap.parse_args()
+
 
 
 def main():
@@ -932,7 +974,17 @@ def main():
 
     plot_hidden_constellations(df, G, out_dir / "01_hidden_constellations_sky.png")
     export_celestial_sphere(df, out_dir / "02_celestial_sphere_3d.html")
-    export_network_explorer(df, G, out_dir / "03_network_explorer.html")
+    export_network_explorer(
+        df,
+        G,
+        out_dir / "03_network_explorer.html",
+        color_mode=args.network_color_mode,
+        phi_prefix=args.network_phi_prefix,
+        phi_weights=args.network_phi_weights,
+        phi_active_threshold=args.network_phi_active_threshold,
+        max_nodes=args.network_max_nodes,
+        score_col=args.network_score_col,
+    )
     plot_explainability_heatmap(df, explain, out_dir / "04_explainability_heatmap.png", top_n=40)
     plot_feature_interaction_heatmap(df, out_dir / "05_feature_interaction_heatmap.png")
     export_proper_motion_trails(df, out_dir / "07_proper_motion_trails.gif", top_k=30, frames=24)
