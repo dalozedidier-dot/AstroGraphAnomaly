@@ -1,36 +1,42 @@
-Region Pack (fast)
-================
+# Region Pack fast
 
-But
----
-Traiter rapidement des chunks Gaia DR3 (ex: `GalaxyCandidates_*.csv.gz`, `VariSummary_*.csv.gz`) pour produire
-des sorties par "région" (chunk) avec:
-- un score d'anomalie simple basé sur distance kNN
-- un embedding PCA2
-- un mini dashboard HTML par région
+Ce module sert à scorer rapidement des fichiers Gaia DR3 issus de tables dérivées, typiquement :
 
-Scripts
--------
-- `tools/run_regions_fast.py`: runner principal (chunk → scored + PCA + index.html)
-- `tools/fetch_gaia_source_tap.py`: enrichissement TAP sur `source_id` pour récupérer `ra/dec/...`
-- `tools/split_by_sky_tiles.py`: découpe un CSV enrichi en tuiles RA/Dec (création de nouvelles régions)
+- `GalaxyCandidates_*.csv.gz` (table `galaxy_candidates`)
+- `VariSummary_*.csv.gz` (table `vari_summary`)
+- optionnel : `GalaxyCatalogueName_*.csv.gz` (mapping `catalogue_id` par `source_id`)
 
-Dépendances
------------
-- `jinja2` (génération HTML)
-- `requests` (TAP)
-Ces deps sont incluses dans `requirements.txt`.
+Contraintes
+- Ces tables ne contiennent généralement pas `ra/dec`, donc elles ne passent pas directement par le pipeline sky-graph principal.
+- Le script produit des artefacts tabulaires et une projection PCA 2D, sans sky map.
 
-Exemples
---------
+## Usage
+
+### Exécuter sur des fichiers
+
 ```bash
-python tools/run_regions_fast.py --kind galaxy_candidates --inputs "data/GalaxyCandidates_*.csv.gz" --out results/galaxy_candidates_fast
-python tools/run_regions_fast.py --kind vari_summary     --inputs "data/VariSummary_*.csv.gz"     --out results/vari_summary_fast
+python tools/region_pack_fast.py   --kind galaxy_candidates   --inputs data/region_pack/raw/GalaxyCandidates_*.csv.gz   --out results/region_pack_fast/galaxy_candidates   --engine robust_zscore   --top-k 200   --max-rows 0
 ```
 
-Limite
-------
-Les tables `galaxy_candidates` / `vari_summary` ne contiennent pas `ra/dec`. Pour obtenir les sky maps:
-1) extraire des `source_id`
-2) enrichir via `fetch_gaia_source_tap.py`
-3) joindre `ra/dec` dans `scored.csv`
+### Smoke CI
+
+Le workflow GitHub Actions `region_pack_fast_smoke.yml` exécute :
+
+```bash
+python tools/ci_region_pack_fast_smoke.py --max-rows 6000 --top-k 120
+```
+
+Les artefacts sont uploadés dans `results/region_pack_fast_ci/`.
+
+## Sorties
+
+Pour chaque région `RID` :
+
+- `results/.../region_<RID>/scored.csv.gz`
+- `results/.../region_<RID>/01_embedding_pca.png`
+- `results/.../region_<RID>/summary.json`
+- `results/.../region_<RID>/index.html`
+
+Et un agrégat :
+
+- `results/.../<kind>_scored_all.csv.gz`

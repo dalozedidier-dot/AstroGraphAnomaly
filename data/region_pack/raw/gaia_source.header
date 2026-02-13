@@ -1,0 +1,990 @@
+# %ECSV 0.9
+# ---
+# delimiter: ','
+# meta: !!omap
+# - release: 'Gaia EDR3'
+# - table: 'gaia_source'
+# - dmversion: '20.1.6'
+# - description: >
+#     This table has an entry for every Gaia observed source as listed in the
+#     Main Database accumulating catalogue version from which the catalogue
+#     release has been generated. It contains the basic source parameters,
+#     that is only final data (no epoch data) and no spectra (neither final
+#     nor epoch).
+# - citation: >
+#     How to cite and acknowledge Gaia: 
+#     https://gea.esac.esa.int/archive/documentation/credits.html 
+# datatype:
+# - 
+#   name: solution_id
+#   datatype: int64
+#   description: 'Solution Identifier'
+#   meta:
+#     ucd: 'meta.version'
+#     datatype: 'long'
+#     dpacunit: 'Dimensionless'
+# - 
+#   name: designation
+#   datatype: string
+#   description: 'Unique source designation (unique across all Data Releases)'
+#   meta:
+#     ucd: 'meta.id;meta.main'
+#     datatype: 'string'
+#     dpacunit: 'Dimensionless'
+# - 
+#   name: source_id
+#   datatype: int64
+#   description: 'Unique source identifier (unique within a particular Data Release)'
+#   meta:
+#     ucd: 'meta.id'
+#     datatype: 'long'
+#     dpacunit: 'Dimensionless'
+# - 
+#   name: random_index
+#   datatype: int64
+#   description: 'Random index used to select subsets'
+#   meta:
+#     ucd: 'meta.code'
+#     datatype: 'long'
+#     dpacunit: 'Dimensionless'
+# - 
+#   name: ref_epoch
+#   datatype: float64
+#   unit: 'yr'
+#   description: 'Reference epoch'
+#   meta:
+#     ucd: 'meta.ref;time.epoch'
+#     datatype: 'double'
+#     dpacunit: 'Time[Julian Years]'
+#     min: '2014'
+#     max: '2025'
+# - 
+#   name: ra
+#   datatype: float64
+#   unit: 'deg'
+#   description: 'Right ascension'
+#   meta:
+#     ucd: 'pos.eq.ra;meta.main'
+#     datatype: 'double'
+#     dpacunit: 'Angle[deg]'
+#     min: '0'
+#     max: '360'
+# - 
+#   name: ra_error
+#   datatype: float32
+#   unit: 'mas'
+#   description: 'Standard error of right ascension'
+#   meta:
+#     ucd: 'stat.error;pos.eq.ra'
+#     datatype: 'float'
+#     dpacunit: 'Angle[mas]'
+#     min: '0'
+#     max: '10000'
+# - 
+#   name: dec
+#   datatype: float64
+#   unit: 'deg'
+#   description: 'Declination'
+#   meta:
+#     ucd: 'pos.eq.dec;meta.main'
+#     datatype: 'double'
+#     dpacunit: 'Angle[deg]'
+#     min: '-90'
+#     max: '90'
+# - 
+#   name: dec_error
+#   datatype: float32
+#   unit: 'mas'
+#   description: 'Standard error of declination'
+#   meta:
+#     ucd: 'stat.error;pos.eq.dec'
+#     datatype: 'float'
+#     dpacunit: 'Angle[mas]'
+#     min: '0'
+#     max: '10000'
+# - 
+#   name: parallax
+#   datatype: float64
+#   unit: 'mas'
+#   description: 'Parallax'
+#   meta:
+#     ucd: 'pos.parallax.trig'
+#     datatype: 'double'
+#     dpacunit: 'Angle[mas]'
+#     min: '-2000'
+#     max: '2000'
+# - 
+#   name: parallax_error
+#   datatype: float32
+#   unit: 'mas'
+#   description: 'Standard error of parallax'
+#   meta:
+#     ucd: 'stat.error;pos.parallax.trig'
+#     datatype: 'float'
+#     dpacunit: 'Angle[mas]'
+#     min: '0'
+#     max: '1000'
+# - 
+#   name: parallax_over_error
+#   datatype: float32
+#   description: 'Parallax divided by its standard error'
+#   meta:
+#     ucd: 'stat.snr;pos.parallax.trig'
+#     datatype: 'float'
+#     dpacunit: 'Dimensionless'
+# - 
+#   name: pm
+#   datatype: float32
+#   unit: 'mas.yr**-1'
+#   description: 'Total proper motion'
+#   meta:
+#     ucd: 'pos.pm;pos.eq'
+#     datatype: 'float'
+#     dpacunit: 'Angular Velocity[mas/year]'
+#     min: '0'
+#     max: '28284.271'
+# - 
+#   name: pmra
+#   datatype: float64
+#   unit: 'mas.yr**-1'
+#   description: 'Proper motion in right ascension direction'
+#   meta:
+#     ucd: 'pos.pm;pos.eq.ra'
+#     datatype: 'double'
+#     dpacunit: 'Angular Velocity[mas/year]'
+#     min: '-20000'
+#     max: '20000'
+# - 
+#   name: pmra_error
+#   datatype: float32
+#   unit: 'mas.yr**-1'
+#   description: 'Standard error of proper motion in right ascension direction'
+#   meta:
+#     ucd: 'stat.error;pos.pm;pos.eq.ra'
+#     datatype: 'float'
+#     dpacunit: 'Angular Velocity[mas/year]'
+#     min: '0'
+#     max: '10000'
+# - 
+#   name: pmdec
+#   datatype: float64
+#   unit: 'mas.yr**-1'
+#   description: 'Proper motion in declination direction'
+#   meta:
+#     ucd: 'pos.pm;pos.eq.dec'
+#     datatype: 'double'
+#     dpacunit: 'Angular Velocity[mas/year]'
+#     min: '-20000'
+#     max: '20000'
+# - 
+#   name: pmdec_error
+#   datatype: float32
+#   unit: 'mas.yr**-1'
+#   description: 'Standard error of proper motion in declination direction'
+#   meta:
+#     ucd: 'stat.error;pos.pm;pos.eq.dec'
+#     datatype: 'float'
+#     dpacunit: 'Angular Velocity[mas/year]'
+#     min: '0'
+#     max: '10000'
+# - 
+#   name: ra_dec_corr
+#   datatype: float32
+#   description: 'Correlation between right ascension and declination'
+#   meta:
+#     ucd: 'stat.correlation'
+#     datatype: 'float'
+#     dpacunit: 'Dimensionless[see description]'
+#     min: '-1'
+#     max: '1'
+# - 
+#   name: ra_parallax_corr
+#   datatype: float32
+#   description: 'Correlation between right ascension and parallax'
+#   meta:
+#     ucd: 'stat.correlation'
+#     datatype: 'float'
+#     dpacunit: 'Dimensionless[see description]'
+#     min: '-1'
+#     max: '1'
+# - 
+#   name: ra_pmra_corr
+#   datatype: float32
+#   description: 'Correlation between right ascension and proper motion in right ascension'
+#   meta:
+#     ucd: 'stat.correlation'
+#     datatype: 'float'
+#     dpacunit: 'Dimensionless[see description]'
+#     min: '-1'
+#     max: '1'
+# - 
+#   name: ra_pmdec_corr
+#   datatype: float32
+#   description: 'Correlation between right ascension and proper motion in declination'
+#   meta:
+#     ucd: 'stat.correlation'
+#     datatype: 'float'
+#     dpacunit: 'Dimensionless[see description]'
+#     min: '-1'
+#     max: '1'
+# - 
+#   name: dec_parallax_corr
+#   datatype: float32
+#   description: 'Correlation between declination and parallax'
+#   meta:
+#     ucd: 'stat.correlation'
+#     datatype: 'float'
+#     dpacunit: 'Dimensionless[see description]'
+#     min: '-1'
+#     max: '1'
+# - 
+#   name: dec_pmra_corr
+#   datatype: float32
+#   description: 'Correlation between declination and proper motion in right ascension'
+#   meta:
+#     ucd: 'stat.correlation'
+#     datatype: 'float'
+#     dpacunit: 'Dimensionless[see description]'
+#     min: '-1'
+#     max: '1'
+# - 
+#   name: dec_pmdec_corr
+#   datatype: float32
+#   description: 'Correlation between declination and proper motion in declination'
+#   meta:
+#     ucd: 'stat.correlation'
+#     datatype: 'float'
+#     dpacunit: 'Dimensionless[see description]'
+#     min: '-1'
+#     max: '1'
+# - 
+#   name: parallax_pmra_corr
+#   datatype: float32
+#   description: 'Correlation between parallax and proper motion in right ascension'
+#   meta:
+#     ucd: 'stat.correlation'
+#     datatype: 'float'
+#     dpacunit: 'Dimensionless[see description]'
+#     min: '-1'
+#     max: '1'
+# - 
+#   name: parallax_pmdec_corr
+#   datatype: float32
+#   description: 'Correlation between parallax and proper motion in declination'
+#   meta:
+#     ucd: 'stat.correlation'
+#     datatype: 'float'
+#     dpacunit: 'Dimensionless[see description]'
+#     min: '-1'
+#     max: '1'
+# - 
+#   name: pmra_pmdec_corr
+#   datatype: float32
+#   description: 'Correlation between proper motion in right ascension and proper motion in declination'
+#   meta:
+#     ucd: 'stat.correlation'
+#     datatype: 'float'
+#     dpacunit: 'Dimensionless[see description]'
+#     min: '-1'
+#     max: '1'
+# - 
+#   name: astrometric_n_obs_al
+#   datatype: int16
+#   description: 'Total number of observations AL'
+#   meta:
+#     ucd: 'meta.number'
+#     datatype: 'short'
+#     dpacunit: 'Dimensionless'
+#     min: '1'
+#     max: '5000'
+# - 
+#   name: astrometric_n_obs_ac
+#   datatype: int16
+#   description: 'Total number of observations AC'
+#   meta:
+#     ucd: 'meta.number'
+#     datatype: 'short'
+#     dpacunit: 'Dimensionless'
+#     min: '0'
+#     max: '5000'
+# - 
+#   name: astrometric_n_good_obs_al
+#   datatype: int16
+#   description: 'Number of good observations AL'
+#   meta:
+#     ucd: 'meta.number'
+#     datatype: 'short'
+#     dpacunit: 'Dimensionless'
+#     min: '1'
+#     max: '5000'
+# - 
+#   name: astrometric_n_bad_obs_al
+#   datatype: int16
+#   description: 'Number of bad observations AL'
+#   meta:
+#     ucd: 'meta.number'
+#     datatype: 'short'
+#     dpacunit: 'Dimensionless'
+#     min: '0'
+#     max: '5000'
+# - 
+#   name: astrometric_gof_al
+#   datatype: float32
+#   description: 'Goodness of fit statistic of model wrt along-scan observations'
+#   meta:
+#     ucd: 'stat.fit.goodness'
+#     datatype: 'float'
+#     dpacunit: 'Dimensionless'
+#     min: '-200'
+#     max: '900000000'
+# - 
+#   name: astrometric_chi2_al
+#   datatype: float32
+#   description: 'AL chi-square value'
+#   meta:
+#     ucd: 'stat.fit.chi2'
+#     datatype: 'float'
+#     dpacunit: 'Dimensionless'
+#     min: '0'
+#     max: '900000000'
+# - 
+#   name: astrometric_excess_noise
+#   datatype: float32
+#   unit: 'mas'
+#   description: 'Excess noise of the source'
+#   meta:
+#     ucd: 'stat.value'
+#     datatype: 'float'
+#     dpacunit: 'Angle[mas]'
+#     min: '0'
+#     max: '21000'
+# - 
+#   name: astrometric_excess_noise_sig
+#   datatype: float32
+#   description: 'Significance of excess noise'
+#   meta:
+#     ucd: 'stat.value'
+#     datatype: 'float'
+#     dpacunit: 'Dimensionless'
+#     min: '0'
+#     max: '10000'
+# - 
+#   name: astrometric_params_solved
+#   datatype: int8
+#   description: 'Which parameters have been solved for?'
+#   meta:
+#     ucd: 'meta.number'
+#     datatype: 'byte'
+#     dpacunit: 'Dimensionless'
+#     min: '0'
+#     max: '95'
+# - 
+#   name: astrometric_primary_flag
+#   datatype: bool
+#   description: 'Primary or seconday'
+#   meta:
+#     ucd: 'meta.code'
+#     datatype: 'boolean'
+#     dpacunit: 'Dimensionless'
+# - 
+#   name: nu_eff_used_in_astrometry
+#   datatype: float32
+#   unit: 'um**-1'
+#   description: 'Effective wavenumber of the source used in the astrometric solution'
+#   meta:
+#     ucd: 'em.wavenumber'
+#     datatype: 'float'
+#     dpacunit: 'Misc[um^-1]'
+# - 
+#   name: pseudocolour
+#   datatype: float32
+#   unit: 'um**-1'
+#   description: 'Astrometrically estimated pseudocolour of the source'
+#   meta:
+#     ucd: 'em.wavenumber'
+#     datatype: 'float'
+#     dpacunit: 'Misc[um^-1]'
+# - 
+#   name: pseudocolour_error
+#   datatype: float32
+#   unit: 'um**-1'
+#   description: 'Standard error of the pseudocolour of the source'
+#   meta:
+#     ucd: 'stat.error;em.wavenumber'
+#     datatype: 'float'
+#     dpacunit: 'Misc[um^-1]'
+# - 
+#   name: ra_pseudocolour_corr
+#   datatype: float32
+#   description: 'Correlation between right ascension and pseudocolour'
+#   meta:
+#     ucd: 'stat.correlation;em.wavenumber;pos.eq.ra'
+#     datatype: 'float'
+#     dpacunit: 'Dimensionless[see description]'
+#     min: '-1'
+#     max: '1'
+# - 
+#   name: dec_pseudocolour_corr
+#   datatype: float32
+#   description: 'Correlation between declination and pseudocolour'
+#   meta:
+#     ucd: 'stat.correlation;em.wavenumber;pos.eq.dec'
+#     datatype: 'float'
+#     dpacunit: 'Dimensionless[see description]'
+#     min: '-1'
+#     max: '1'
+# - 
+#   name: parallax_pseudocolour_corr
+#   datatype: float32
+#   description: 'Correlation between parallax and pseudocolour'
+#   meta:
+#     ucd: 'stat.correlation;em.wavenumber;pos.parallax'
+#     datatype: 'float'
+#     dpacunit: 'Dimensionless[see description]'
+#     min: '-1'
+#     max: '1'
+# - 
+#   name: pmra_pseudocolour_corr
+#   datatype: float32
+#   description: 'Correlation between proper motion in right asension and pseudocolour'
+#   meta:
+#     ucd: 'stat.correlation;em.wavenumber;pos.pm;pos.eq.ra'
+#     datatype: 'float'
+#     dpacunit: 'Dimensionless[see description]'
+#     min: '-1'
+#     max: '1'
+# - 
+#   name: pmdec_pseudocolour_corr
+#   datatype: float32
+#   description: 'Correlation between proper motion in declination and pseudocolour'
+#   meta:
+#     ucd: 'stat.correlation;em.wavenumber;pos.pm;pos.eq.dec'
+#     datatype: 'float'
+#     dpacunit: 'Dimensionless[see description]'
+#     min: '-1'
+#     max: '1'
+# - 
+#   name: astrometric_matched_transits
+#   datatype: int16
+#   description: 'Matched FOV transits used in the AGIS solution'
+#   meta:
+#     ucd: 'meta.number'
+#     datatype: 'short'
+#     dpacunit: 'Dimensionless'
+# - 
+#   name: visibility_periods_used
+#   datatype: int16
+#   description: 'Number of visibility periods used in Astrometric solution'
+#   meta:
+#     ucd: 'meta.number'
+#     datatype: 'short'
+#     dpacunit: 'Dimensionless'
+# - 
+#   name: astrometric_sigma5d_max
+#   datatype: float32
+#   unit: 'mas'
+#   description: 'The longest semi-major axis of the 5-d error ellipsoid'
+#   meta:
+#     ucd: 'stat;pos.errorEllipse'
+#     datatype: 'float'
+#     dpacunit: 'Angle[mas]'
+# - 
+#   name: matched_transits
+#   datatype: int16
+#   description: 'The number of transits matched to this source'
+#   meta:
+#     ucd: 'meta.number'
+#     datatype: 'short'
+#     dpacunit: 'Dimensionless'
+#     min: '0'
+#     max: '500'
+# - 
+#   name: new_matched_transits
+#   datatype: int16
+#   description: 'The number of transits newly incorporated into an existing source in the current cycle'
+#   meta:
+#     ucd: 'meta.number'
+#     datatype: 'short'
+#     dpacunit: 'Dimensionless'
+# - 
+#   name: matched_transits_removed
+#   datatype: int16
+#   description: 'The number of transits removed from an existing source in the current cycle'
+#   meta:
+#     ucd: 'meta.number'
+#     datatype: 'short'
+#     dpacunit: 'Dimensionless'
+# - 
+#   name: ipd_gof_harmonic_amplitude
+#   datatype: float32
+#   description: 'Amplitude of the IPD GoF versus position angle of scan'
+#   meta:
+#     ucd: 'stat.value'
+#     datatype: 'float'
+#     dpacunit: 'Dimensionless[see description]'
+#     min: '0'
+# - 
+#   name: ipd_gof_harmonic_phase
+#   datatype: float32
+#   unit: 'deg'
+#   description: 'Phase of the IPD GoF versus position angle of scan'
+#   meta:
+#     ucd: 'pos.posAng;stat.value'
+#     datatype: 'float'
+#     dpacunit: 'Angle[deg]'
+#     min: '0'
+#     max: '180'
+# - 
+#   name: ipd_frac_multi_peak
+#   datatype: int8
+#   description: 'Percent of successful-IPD windows with more than one peak'
+#   meta:
+#     ucd: 'stat.value'
+#     datatype: 'byte'
+#     dpacunit: 'Dimensionless'
+#     min: '0'
+#     max: '100'
+# - 
+#   name: ipd_frac_odd_win
+#   datatype: int8
+#   description: 'Percent of transits with truncated windows or multiple gate'
+#   meta:
+#     ucd: 'stat.value'
+#     datatype: 'byte'
+#     dpacunit: 'Dimensionless'
+#     min: '0'
+#     max: '100'
+# - 
+#   name: ruwe
+#   datatype: float32
+#   description: 'Renormalised unit weight error'
+#   meta:
+#     ucd: 'stat.error'
+#     datatype: 'float'
+#     dpacunit: 'Dimensionless'
+#     min: '0'
+# - 
+#   name: scan_direction_strength_k1
+#   datatype: float32
+#   description: 'Degree of concentration of scan directions across the source'
+#   meta:
+#     ucd: 'stat.value'
+#     datatype: 'float'
+#     dpacunit: 'Dimensionless'
+#     min: '0'
+#     max: '1'
+# - 
+#   name: scan_direction_strength_k2
+#   datatype: float32
+#   description: 'Degree of concentration of scan directions across the source'
+#   meta:
+#     ucd: 'stat.value'
+#     datatype: 'float'
+#     dpacunit: 'Dimensionless'
+#     min: '0'
+#     max: '1'
+# - 
+#   name: scan_direction_strength_k3
+#   datatype: float32
+#   description: 'Degree of concentration of scan directions across the source'
+#   meta:
+#     ucd: 'stat.value'
+#     datatype: 'float'
+#     dpacunit: 'Dimensionless'
+#     min: '0'
+#     max: '1'
+# - 
+#   name: scan_direction_strength_k4
+#   datatype: float32
+#   description: 'Degree of concentration of scan directions across the source'
+#   meta:
+#     ucd: 'stat.value'
+#     datatype: 'float'
+#     dpacunit: 'Dimensionless'
+#     min: '0'
+#     max: '1'
+# - 
+#   name: scan_direction_mean_k1
+#   datatype: float32
+#   unit: 'deg'
+#   description: 'Mean position angle of scan directions across the source'
+#   meta:
+#     ucd: 'pos.posAng;stat.mean'
+#     datatype: 'float'
+#     dpacunit: 'Angle[deg]'
+#     min: '-180'
+#     max: '180'
+# - 
+#   name: scan_direction_mean_k2
+#   datatype: float32
+#   unit: 'deg'
+#   description: 'Mean position angle of scan directions across the source'
+#   meta:
+#     ucd: 'pos.posAng;stat.mean'
+#     datatype: 'float'
+#     dpacunit: 'Angle[deg]'
+#     min: '-90'
+#     max: '90'
+# - 
+#   name: scan_direction_mean_k3
+#   datatype: float32
+#   unit: 'deg'
+#   description: 'Mean position angle of scan directions across the source'
+#   meta:
+#     ucd: 'pos.posAng;stat.mean'
+#     datatype: 'float'
+#     dpacunit: 'Angle[deg]'
+#     min: '-60'
+#     max: '60'
+# - 
+#   name: scan_direction_mean_k4
+#   datatype: float32
+#   unit: 'deg'
+#   description: 'Mean position angle of scan directions across the source'
+#   meta:
+#     ucd: 'pos.posAng;stat.mean'
+#     datatype: 'float'
+#     dpacunit: 'Angle[deg]'
+#     min: '-45'
+#     max: '45'
+# - 
+#   name: duplicated_source
+#   datatype: bool
+#   description: 'Source with multiple source identifiers'
+#   meta:
+#     ucd: 'meta.code.status'
+#     datatype: 'boolean'
+#     dpacunit: 'Dimensionless'
+# - 
+#   name: phot_g_n_obs
+#   datatype: int16
+#   description: 'Number of observations contributing to G photometry'
+#   meta:
+#     ucd: 'meta.number'
+#     datatype: 'short'
+#     dpacunit: 'Dimensionless'
+#     min: '0'
+#     max: '200000'
+# - 
+#   name: phot_g_mean_flux
+#   datatype: float64
+#   unit: '''electron''.s**-1'
+#   description: 'G-band mean flux'
+#   meta:
+#     ucd: 'phot.flux;em.opt'
+#     datatype: 'double'
+#     dpacunit: 'Flux[e-/s]'
+#     min: '0'
+#     max: '20000000000'
+# - 
+#   name: phot_g_mean_flux_error
+#   datatype: float32
+#   unit: '''electron''.s**-1'
+#   description: 'Error on G-band mean flux'
+#   meta:
+#     ucd: 'stat.error;phot.flux;em.opt'
+#     datatype: 'float'
+#     dpacunit: 'Flux[e-/s]'
+#     min: '0'
+#     max: '20000000000'
+# - 
+#   name: phot_g_mean_flux_over_error
+#   datatype: float32
+#   description: 'G-band mean flux divided by its error'
+#   meta:
+#     ucd: 'stat.snr;phot.flux;em.opt'
+#     datatype: 'float'
+#     dpacunit: 'Dimensionless'
+# - 
+#   name: phot_g_mean_mag
+#   datatype: float32
+#   unit: 'mag'
+#   description: 'G-band mean magnitude'
+#   meta:
+#     ucd: 'phot.mag;em.opt'
+#     datatype: 'float'
+#     dpacunit: 'Magnitude[mag]'
+#     min: '0'
+#     max: '30'
+# - 
+#   name: phot_bp_n_obs
+#   datatype: int16
+#   description: 'Number of observations contributing to BP photometry'
+#   meta:
+#     ucd: 'meta.number'
+#     datatype: 'short'
+#     dpacunit: 'Dimensionless'
+#     min: '0'
+#     max: '200000'
+# - 
+#   name: phot_bp_mean_flux
+#   datatype: float64
+#   unit: '''electron''.s**-1'
+#   description: 'Integrated BP mean flux'
+#   meta:
+#     ucd: 'phot.flux;em.opt.B'
+#     datatype: 'double'
+#     dpacunit: 'Flux[e-/s]'
+#     min: '0'
+#     max: '20000000000'
+# - 
+#   name: phot_bp_mean_flux_error
+#   datatype: float32
+#   unit: '''electron''.s**-1'
+#   description: 'Error on the integrated BP mean flux'
+#   meta:
+#     ucd: 'stat.error;phot.flux;em.opt.B'
+#     datatype: 'float'
+#     dpacunit: 'Flux[e-/s]'
+#     min: '0'
+#     max: '20000000000'
+# - 
+#   name: phot_bp_mean_flux_over_error
+#   datatype: float32
+#   description: 'Integrated BP mean flux divided by its error'
+#   meta:
+#     ucd: 'stat.snr;phot.flux;em.opt.B'
+#     datatype: 'float'
+#     dpacunit: 'Dimensionless'
+# - 
+#   name: phot_bp_mean_mag
+#   datatype: float32
+#   unit: 'mag'
+#   description: 'Integrated BP mean magnitude'
+#   meta:
+#     ucd: 'phot.mag;em.opt.B'
+#     datatype: 'float'
+#     dpacunit: 'Magnitude[mag]'
+#     min: '0'
+#     max: '30'
+# - 
+#   name: phot_rp_n_obs
+#   datatype: int16
+#   description: 'Number of observations contributing to RP photometry'
+#   meta:
+#     ucd: 'meta.number'
+#     datatype: 'short'
+#     dpacunit: 'Dimensionless'
+#     min: '0'
+#     max: '200000'
+# - 
+#   name: phot_rp_mean_flux
+#   datatype: float64
+#   unit: '''electron''.s**-1'
+#   description: 'Integrated RP mean flux'
+#   meta:
+#     ucd: 'phot.flux;em.opt.R'
+#     datatype: 'double'
+#     dpacunit: 'Flux[e-/s]'
+#     min: '0'
+#     max: '20000000000'
+# - 
+#   name: phot_rp_mean_flux_error
+#   datatype: float32
+#   unit: '''electron''.s**-1'
+#   description: 'Error on the integrated RP mean flux'
+#   meta:
+#     ucd: 'stat.error;phot.flux;em.opt.R'
+#     datatype: 'float'
+#     dpacunit: 'Flux[e-/s]'
+#     min: '0'
+#     max: '20000000000'
+# - 
+#   name: phot_rp_mean_flux_over_error
+#   datatype: float32
+#   description: 'Integrated RP mean flux divided by its error'
+#   meta:
+#     ucd: 'stat.snr;phot.flux;em.opt.R'
+#     datatype: 'float'
+#     dpacunit: 'Dimensionless'
+# - 
+#   name: phot_rp_mean_mag
+#   datatype: float32
+#   unit: 'mag'
+#   description: 'Integrated RP mean magnitude'
+#   meta:
+#     ucd: 'phot.mag;em.opt.R'
+#     datatype: 'float'
+#     dpacunit: 'Magnitude[mag]'
+#     min: '0'
+#     max: '30'
+# - 
+#   name: phot_bp_n_contaminated_transits
+#   datatype: int16
+#   description: 'Number of BP contaminated transits'
+#   meta:
+#     ucd: 'meta.number'
+#     datatype: 'short'
+#     dpacunit: 'Dimensionless'
+# - 
+#   name: phot_bp_n_blended_transits
+#   datatype: int16
+#   description: 'Number of BP blended transits'
+#   meta:
+#     ucd: 'meta.number'
+#     datatype: 'short'
+#     dpacunit: 'Dimensionless'
+# - 
+#   name: phot_rp_n_contaminated_transits
+#   datatype: int16
+#   description: 'Number of RP contaminated transits'
+#   meta:
+#     ucd: 'meta.number'
+#     datatype: 'short'
+#     dpacunit: 'Dimensionless'
+# - 
+#   name: phot_rp_n_blended_transits
+#   datatype: int16
+#   description: 'Number of RP blended transits'
+#   meta:
+#     ucd: 'meta.number'
+#     datatype: 'short'
+#     dpacunit: 'Dimensionless'
+# - 
+#   name: phot_proc_mode
+#   datatype: int8
+#   description: 'Photometry processing mode'
+#   meta:
+#     ucd: 'meta.code'
+#     datatype: 'byte'
+#     dpacunit: 'Dimensionless'
+#     min: '0'
+#     max: '2'
+# - 
+#   name: phot_bp_rp_excess_factor
+#   datatype: float32
+#   description: 'BP/RP excess factor'
+#   meta:
+#     ucd: 'arith.factor;phot.flux;em.opt'
+#     datatype: 'float'
+#     dpacunit: 'Dimensionless'
+# - 
+#   name: bp_rp
+#   datatype: float32
+#   unit: 'mag'
+#   description: 'BP - RP colour'
+#   meta:
+#     ucd: 'phot.color;em.opt.B;em.opt.R'
+#     datatype: 'float'
+#     dpacunit: 'Magnitude[mag]'
+# - 
+#   name: bp_g
+#   datatype: float32
+#   unit: 'mag'
+#   description: 'BP - G colour'
+#   meta:
+#     ucd: 'phot.color;em.opt.B;em.opt'
+#     datatype: 'float'
+#     dpacunit: 'Magnitude[mag]'
+# - 
+#   name: g_rp
+#   datatype: float32
+#   unit: 'mag'
+#   description: 'G - RP colour'
+#   meta:
+#     ucd: 'phot.color;em.opt;em.opt.R'
+#     datatype: 'float'
+#     dpacunit: 'Magnitude[mag]'
+# - 
+#   name: dr2_radial_velocity
+#   datatype: float32
+#   unit: 'km.s**-1'
+#   description: 'Radial velocity from Gaia DR2'
+#   meta:
+#     ucd: 'spect.dopplerVeloc.opt;em.opt.I'
+#     datatype: 'float'
+#     dpacunit: 'Velocity[km/s]'
+#     min: '-1000'
+#     max: '1000'
+# - 
+#   name: dr2_radial_velocity_error
+#   datatype: float32
+#   unit: 'km.s**-1'
+#   description: 'Radial velocity error from Gaia DR2'
+#   meta:
+#     ucd: 'stat.error;spect.dopplerVeloc.opt;em.opt.I'
+#     datatype: 'float'
+#     dpacunit: 'Velocity[km/s]'
+#     min: '0'
+#     max: '1000'
+# - 
+#   name: dr2_rv_nb_transits
+#   datatype: int16
+#   description: 'Number of transits used to compute radial velocity in Gaia DR2'
+#   meta:
+#     ucd: 'meta.number'
+#     datatype: 'short'
+#     dpacunit: 'Dimensionless'
+#     min: '2'
+# - 
+#   name: dr2_rv_template_teff
+#   datatype: float32
+#   unit: 'K'
+#   description: 'Teff of the template used to compute radial velocity in Gaia DR2'
+#   meta:
+#     ucd: 'stat.fit.param'
+#     datatype: 'float'
+#     dpacunit: 'Temperature[K]'
+# - 
+#   name: dr2_rv_template_logg
+#   datatype: float32
+#   unit: 'log(cm.s**-2)'
+#   description: 'logg of the template used to compute radial velocity in Gaia DR2'
+#   meta:
+#     ucd: 'stat.fit.param'
+#     datatype: 'float'
+#     dpacunit: 'GravitySurface[log cgs]'
+# - 
+#   name: dr2_rv_template_fe_h
+#   datatype: float32
+#   unit: '''dex'''
+#   description: 'Fe/H of the template used to compute radial velocity in Gaia DR2'
+#   meta:
+#     ucd: 'stat.fit.param'
+#     datatype: 'float'
+#     dpacunit: 'Abundances[dex]'
+# - 
+#   name: l
+#   datatype: float64
+#   unit: 'deg'
+#   description: 'Galactic longitude'
+#   meta:
+#     ucd: 'pos.galactic.lon'
+#     datatype: 'double'
+#     dpacunit: 'Angle[deg]'
+#     min: '0'
+#     max: '360'
+# - 
+#   name: b
+#   datatype: float64
+#   unit: 'deg'
+#   description: 'Galactic latitude'
+#   meta:
+#     ucd: 'pos.galactic.lat'
+#     datatype: 'double'
+#     dpacunit: 'Angle[deg]'
+#     min: '-90'
+#     max: '90'
+# - 
+#   name: ecl_lon
+#   datatype: float64
+#   unit: 'deg'
+#   description: 'Ecliptic longitude'
+#   meta:
+#     ucd: 'pos.ecliptic.lon'
+#     datatype: 'double'
+#     dpacunit: 'Angle[deg]'
+#     min: '0'
+#     max: '360'
+# - 
+#   name: ecl_lat
+#   datatype: float64
+#   unit: 'deg'
+#   description: 'Ecliptic latitude'
+#   meta:
+#     ucd: 'pos.ecliptic.lat'
+#     datatype: 'double'
+#     dpacunit: 'Angle[deg]'
+#     min: '-90'
+#     max: '90'
+
