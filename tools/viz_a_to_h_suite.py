@@ -1,21 +1,34 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-AstroGraphAnomaly — A→H Visualization Suite
-------------------------------------------
-Implements the A→H gallery:
-A) Hidden Constellations-style sky map (density cloud + glow + organic curves)
-B) Celestial sphere 3D (Plotly)
-C) Network explorer (PyVis)
-D) Explainability heatmaps (LIME jsonl if available, else robust z-scores)
-E) Simple dashboard (HTML index linking to all outputs)
-F) Proper motion trails (GIF)
-G) "Biocubes"-style feature summary (Plotly 3D)
-H) UMAP cosmic cloud (PNG + Plotly HTML)
+AstroGraphAnomaly A to H visualization suite
 
-Workflow-first:
-- Standalone script (no package import).
-- Reads `scored.csv` + optional graph/explanations.
+Gallery outputs
+A  Sky map anomalies (Hidden Constellations style)
+B  Celestial sphere 3D interactive (Plotly)
+C  Graph network explorer (PyVis)
+D  Explainability heatmap (LIME if available, else robust z scores)
+E  Simple dashboard HTML linking everything
+F  Proper motion trails GIF
+G  Feature biocubes (Plotly 3D)
+H  UMAP cosmic cloud (PNG plus Plotly HTML)
+
+This script is workflow first.
+It reads scored.csv produced by the pipeline, plus optional graph and explanations jsonl.
+
+Key extra feature
+You can color the sphere, the network, the UMAP and the HR CMD plot using multi incoherence modes.
+
+Color modes
+score         Continuous anomaly_score_norm
+dominant_phi  Categorical dominant constraint from phi_* columns
+rgb_phi       RGB mix from three selected phi columns
+
+Expected columns for multi incoherence
+phi_* columns in scored.csv, normalized or not.
+For example phi_isolation_forest, phi_lof, phi_ocsvm, phi_graph.
+
+Outputs are written under: <run_dir>/viz_a_to_h/
 """
 
 from __future__ import annotations
@@ -23,9 +36,8 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import hashlib
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -72,17 +84,26 @@ except Exception:
     imageio = None
     _HAS_IMAGEIO = False
 
+try:
+    import networkx as nx  # type: ignore
+    _HAS_NX = True
+except Exception:
+    nx = None
+    _HAS_NX = False
+
 
 def robust_unit_interval(x: np.ndarray) -> np.ndarray:
     x = np.asarray(x, dtype=float)
     x = np.where(np.isfinite(x), x, np.nan)
-    lo = np.nanpercentile(x, 5)
-    hi = np.nanpercentile(x, 95)
-    if not np.isfinite(lo) or not np.isfinite(hi) or (hi - lo) < 1e-12:
-        lo = np.nanmin(x)
-        hi = np.nanmax(x)
-        if not np.isfinite(lo) or not np.isfinite(hi) or (hi - lo) < 1e-12:
-            return np.zeros_like(x, dtype=float)
+    if not np.any(np.isfinite(x)):
+        return np.zeros_like(x, dtype=float)
+    lo = float(np.nanpercentile(x, 5))
+    hi = float(np.nanpercentile(x, 95))
+    if not (math.isfinite(lo) and math.isfinite(hi)) or (hi - lo) < 1e-12:
+        lo = float(np.nanmin(x))
+        hi = float(np.nanmax(x))
+    if not (math.isfinite(lo) and math.isfinite(hi)) or (hi - lo) < 1e-12:
+        return np.zeros_like(x, dtype=float)
     y = (x - lo) / (hi - lo)
     y = np.clip(y, 0.0, 1.0)
     y = np.where(np.isfinite(y), y, 0.0)
@@ -92,17 +113,55 @@ def robust_unit_interval(x: np.ndarray) -> np.ndarray:
 def robust_z(x: np.ndarray) -> np.ndarray:
     x = np.asarray(x, dtype=float)
     x = np.where(np.isfinite(x), x, np.nan)
-    med = np.nanmedian(x)
-    mad = np.nanmedian(np.abs(x - med)) + 1e-12
-    z = (x - med) / (1.4826 * mad)
-    z = np.where(np.isfinite(z), z, 0.0)
-    return z
+    if not np.any(np.isfinite(x)):
+        return np.zeros_like(x, dtype=float)
+    med = float(np.nanmedian(x))
+    mad = float(np.nanmedian(np.abs(x - med))) + 1e-12
+    return (x - med) / (1.4826 * mad)
+
+
+def _parse_kv_list(s: str) -> Dict[str, float]:
+    out: Dict[str, float] = {}
+    s = (s or "").strip()
+    if not s:
+        return out
+    for part in s.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "=" not in part:
+            continue
+        k, v = part.split("=", 1)
+        k = k.strip()
+        v = v.strip()
+        if not k:
+            continue
+        try:
+            out[k] = float(v)
+        except Exception:
+            continue
+    return out
 
 
 def ensure_core(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     if "source_id" in df.columns:
         df["source_id"] = df["source_id"].astype(str)
+
+    # Normalize naming variants for Gaia columns when possible
+    rename_map = {}
+    if "ra" not in df.columns:
+        for cand in ["ra_deg", "raDegrees", "raJ2000", "ra_icrs"]:
+            if cand in df.columns:
+                rename_map[cand] = "ra"
+                break
+    if "dec" not in df.columns:
+        for cand in ["dec_deg", "decDegrees", "decJ2000", "dec_icrs"]:
+            if cand in df.columns:
+                rename_map[cand] = "dec"
+                break
+    if rename_map:
+        df = df.rename(columns=rename_map)
 
     if "anomaly_score" not in df.columns:
         df["anomaly_score"] = 0.0
@@ -121,11 +180,6 @@ def ensure_core(df: pd.DataFrame) -> pd.DataFrame:
 
     df["anomaly_score_norm"] = robust_unit_interval(df["anomaly_score_hi"].to_numpy(float))
 
-    # Optional: composite incoherence score normalization for multi-constraint viz
-    if "incoherence_score" in df.columns:
-        df["incoherence_score"] = pd.to_numeric(df["incoherence_score"], errors="coerce").fillna(0.0)
-        df["incoherence_score_norm"] = robust_unit_interval(df["incoherence_score"].to_numpy(float))
-
     if "distance" not in df.columns and "parallax" in df.columns:
         par = pd.to_numeric(df["parallax"], errors="coerce")
         df["distance"] = (1000.0 / par).replace([np.inf, -np.inf], np.nan)
@@ -133,176 +187,304 @@ def ensure_core(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def pick_graph_path(run_dir: Path, arg_graph: Optional[str]) -> Optional[Path]:
-    if arg_graph:
-        p = Path(arg_graph)
+def _phi_columns(df: pd.DataFrame, phi_prefix: str) -> List[str]:
+    pref = (phi_prefix or "phi_").strip()
+    cols = [c for c in df.columns if c.startswith(pref)]
+    return cols
+
+
+def _normalize_phi_columns(df: pd.DataFrame, phi_cols: List[str]) -> pd.DataFrame:
+    df = df.copy()
+    for c in phi_cols:
+        vals = pd.to_numeric(df[c], errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0).to_numpy(float)
+        df[c] = robust_unit_interval(vals)
+    return df
+
+
+def _prepare_incoherence(
+    df: pd.DataFrame,
+    color_mode: str,
+    phi_prefix: str,
+    phi_weights_s: str,
+    rgb_phis_s: str,
+) -> Tuple[pd.DataFrame, Dict[str, str]]:
+    """Prepare columns used for multicolor rendering.
+
+    Adds:
+    - incoherence_score in [0,1]
+    - incoherence_dominant (string) when dominant_phi
+    - incoherence_rgb (rgb string) when rgb_phi
+
+    Returns df, and a color map for dominant categories.
+    """
+    df = df.copy()
+    mode = (color_mode or "score").strip().lower()
+    phi_prefix = (phi_prefix or "phi_").strip()
+
+    # Default
+    df["incoherence_score"] = df.get("anomaly_score_norm", 0.0)
+    df["incoherence_dominant"] = ""
+    df["incoherence_rgb"] = ""
+
+    palette = [
+        "#ff4d4d", "#ffd34d", "#4dff88", "#4dd2ff",
+        "#b84dff", "#ff4dd2", "#7dff4d", "#4d7dff",
+        "#ff8a4d", "#4dfff0",
+    ]
+    color_map: Dict[str, str] = {}
+
+    if mode == "score":
+        return df, color_map
+
+    phi_cols = _phi_columns(df, phi_prefix)
+    if not phi_cols:
+        # No phi columns available, fallback
+        return df, color_map
+
+    df = _normalize_phi_columns(df, phi_cols)
+
+    # Parse weights
+    w_raw = _parse_kv_list(phi_weights_s)
+    weights: Dict[str, float] = {}
+    for c in phi_cols:
+        short = c[len(phi_prefix):]
+        w = w_raw.get(c, w_raw.get(short, 1.0))
+        try:
+            wf = float(w)
+        except Exception:
+            wf = 1.0
+        weights[c] = max(0.0, wf)
+
+    wsum = sum(weights.values())
+    if wsum <= 1e-12:
+        weights = {c: 1.0 for c in phi_cols}
+        wsum = float(len(phi_cols))
+
+    # Contributions matrix
+    Phi = np.column_stack([df[c].to_numpy(float) for c in phi_cols])
+    W = np.array([weights[c] for c in phi_cols], dtype=float).reshape(1, -1)
+    contrib = Phi * W
+    inco = contrib.sum(axis=1) / float(wsum)
+    inco = np.clip(inco, 0.0, 1.0)
+    df["incoherence_score"] = inco
+
+    if mode == "dominant_phi":
+        idx = np.argmax(contrib, axis=1)
+        dom_cols = [phi_cols[int(i)] for i in idx.tolist()]
+        dom_names = [c[len(phi_prefix):] for c in dom_cols]
+        df["incoherence_dominant"] = dom_names
+
+        uniq = sorted(set(dom_names))
+        for i, name in enumerate(uniq):
+            color_map[name] = palette[i % len(palette)]
+        return df, color_map
+
+    if mode == "rgb_phi":
+        rgb_phis = [p.strip() for p in (rgb_phis_s or "").split(",") if p.strip()]
+        rgb_cols: List[str] = []
+        for p in rgb_phis:
+            if p in df.columns:
+                rgb_cols.append(p)
+            else:
+                cand = phi_prefix + p
+                if cand in df.columns:
+                    rgb_cols.append(cand)
+        if len(rgb_cols) < 3:
+            rgb_cols = phi_cols[:3] if len(phi_cols) >= 3 else phi_cols
+
+        # Ensure 3 columns by padding with zeros if needed
+        while len(rgb_cols) < 3:
+            df["__phi_pad_%d" % len(rgb_cols)] = 0.0
+            rgb_cols.append("__phi_pad_%d" % (len(rgb_cols) - 1))
+
+        R = df[rgb_cols[0]].to_numpy(float)
+        G = df[rgb_cols[1]].to_numpy(float)
+        B = df[rgb_cols[2]].to_numpy(float)
+
+        # Optional global intensity from incoherence_score
+        I = df["incoherence_score"].to_numpy(float)
+        # Blend with intensity so pale points remain visible
+        R2 = np.clip(0.25 * I + 0.75 * R, 0.0, 1.0)
+        G2 = np.clip(0.25 * I + 0.75 * G, 0.0, 1.0)
+        B2 = np.clip(0.25 * I + 0.75 * B, 0.0, 1.0)
+
+        rgb = []
+        for r, g, b in zip(R2.tolist(), G2.tolist(), B2.tolist(), strict=False):
+            rr = int(255 * float(r))
+            gg = int(255 * float(g))
+            bb = int(255 * float(b))
+            rgb.append(f"rgb({rr},{gg},{bb})")
+        df["incoherence_rgb"] = rgb
+        return df, color_map
+
+    # Unknown mode, fallback
+    return df, color_map
+
+
+def pick_graph_path(run_dir: Path, graph_arg: str) -> Optional[Path]:
+    if graph_arg and graph_arg.strip():
+        p = Path(graph_arg)
         return p if p.exists() else None
-    for name in ["graph_union.graphml", "graph_full.graphml", "graph_topk.graphml"]:
-        p = run_dir / name
+    candidates = [
+        run_dir / "graph_full.graphml",
+        run_dir / "graph_topk.graphml",
+        run_dir / "graph_union.graphml",
+        run_dir / "graph.graphml",
+    ]
+    for p in candidates:
         if p.exists():
             return p
     return None
 
 
-def load_graph(graph_path: Path):
-    import networkx as nx
-    G = nx.read_graphml(graph_path)
-    G = nx.relabel_nodes(G, {n: str(n) for n in G.nodes()})
-    return G
+def load_graph(graph_path: Optional[Path]):
+    if graph_path is None:
+        return None
+    if not _HAS_NX:
+        return None
+    try:
+        G = nx.read_graphml(graph_path)
+        if not all(isinstance(n, str) for n in G.nodes()):
+            G = nx.relabel_nodes(G, {n: str(n) for n in G.nodes()}, copy=True)
+        return G
+    except Exception:
+        return None
 
 
 def community_labels(G) -> Dict[str, int]:
-    comm_id: Dict[str, int] = {}
+    if not _HAS_NX:
+        return {}
     try:
-        from networkx.algorithms.community import louvain_communities
-        comms = louvain_communities(G, seed=42)
+        from networkx.algorithms.community import greedy_modularity_communities  # type: ignore
     except Exception:
-        from networkx.algorithms.community import greedy_modularity_communities
-        comms = greedy_modularity_communities(G)
+        return {}
+    try:
+        comms = list(greedy_modularity_communities(G))
+    except Exception:
+        return {}
+    labels: Dict[str, int] = {}
     for i, cset in enumerate(comms):
         for n in cset:
-            comm_id[str(n)] = int(i)
-    return comm_id
+            labels[str(n)] = int(i)
+    return labels
 
 
 def sample_subgraph(G, df: pd.DataFrame, max_nodes: int = 1200) -> Tuple[List[str], List[Tuple[str, str]]]:
-    rng = np.random.default_rng(42)
-    nodes = list(G.nodes())
-    if len(nodes) <= max_nodes:
-        edges = [(str(u), str(v)) for u, v in G.edges()]
-        return [str(n) for n in nodes], edges
+    """Keep top anomalies and some neighbors for interactive graph."""
+    nodes = [str(n) for n in G.nodes()]
+    if "source_id" in df.columns:
+        keep = df.sort_values("incoherence_score", ascending=False)["source_id"].astype(str).head(max_nodes).tolist()
+        keep_set = set(keep)
+        # add neighbors for context
+        for n in keep[: min(250, len(keep))]:
+            if n in G:
+                for nb in G.neighbors(n):
+                    keep_set.add(str(nb))
+        keep = list(keep_set)
+    else:
+        keep = nodes[:max_nodes]
 
-    d = df.copy()
-    if "source_id" not in d.columns:
-        d["source_id"] = d.index.astype(str)
-    d = d[d["source_id"].isin(nodes)]
-    d = d.sort_values("anomaly_score_hi", ascending=False)
-
-    top_keep = d.head(min(200, len(d)))["source_id"].astype(str).tolist()
-    comm = {}
-    if "community_id" in d.columns:
-        comm = dict(zip(d["source_id"].astype(str).tolist(), d["community_id"].to_numpy(int)))
-
-    keep = set(top_keep)
-    if comm:
-        for cid in sorted(set(comm.values())):
-            pool = d[(d["community_id"] == cid) & (d["anomaly_label"].astype(int) != -1)]["source_id"].astype(str).tolist()
-            if len(pool) == 0:
-                continue
-            k = min(25, len(pool))
-            chosen = rng.choice(pool, size=k, replace=False).tolist()
-            keep.update(chosen)
-
-    if len(keep) < max_nodes:
-        pool = [n for n in nodes if n not in keep]
-        k = min(max_nodes - len(keep), len(pool))
-        if k > 0:
-            keep.update(rng.choice(pool, size=k, replace=False).tolist())
-
-    keep_list = sorted(keep)
-    keep_set = set(keep_list)
-    edge_list = []
-    for u, v in G.edges():
-        su, sv = str(u), str(v)
-        if su in keep_set and sv in keep_set:
-            edge_list.append((su, sv))
-    return keep_list, edge_list
+    H = G.subgraph(keep)
+    edges = [(str(u), str(v)) for u, v in H.edges()]
+    return list(H.nodes()), edges
 
 
-def _blur2d(H: np.ndarray, sigma: float = 1.4) -> np.ndarray:
+def _blur2d(a: np.ndarray, sigma: float) -> np.ndarray:
     if _HAS_SCIPY and gaussian_filter is not None:
-        return gaussian_filter(H, sigma=sigma)
-    K = np.array([[1, 2, 1],
-                  [2, 4, 2],
-                  [1, 2, 1]], dtype=float)
-    K /= K.sum()
-    X = H.copy()
-    for _ in range(3):
-        Xp = np.pad(X, 1, mode="edge")
-        Y = np.zeros_like(X)
-        for i in range(X.shape[0]):
-            for j in range(X.shape[1]):
-                Y[i, j] = np.sum(Xp[i:i+3, j:j+3] * K)
-        X = Y
-    return X
+        return gaussian_filter(a, sigma=sigma)
+    # fallback simple box blur
+    k = int(max(1, round(2 * sigma)))
+    if k <= 1:
+        return a
+    pad = k
+    ap = np.pad(a, pad, mode="reflect")
+    out = np.zeros_like(a)
+    for i in range(a.shape[0]):
+        for j in range(a.shape[1]):
+            out[i, j] = ap[i:i + 2 * pad + 1, j:j + 2 * pad + 1].mean()
+    return out
 
 
-def _glow_scatter(x, y, c, s, ax):
-    ax.scatter(x, y, s=s*10, c=c, alpha=0.08, linewidths=0)
-    ax.scatter(x, y, s=s*4,  c=c, alpha=0.12, linewidths=0)
-    ax.scatter(x, y, s=s,    c=c, alpha=0.65, linewidths=0)
+def _glow_scatter(ax, x, y, s, alpha, color):
+    for k, a in [(7.0, alpha * 0.06), (4.0, alpha * 0.12), (2.2, alpha * 0.22)]:
+        ax.scatter(x, y, s=s * k, alpha=a, c=color, linewidths=0)
 
 
 def plot_hidden_constellations(df: pd.DataFrame, G_opt, out_png: Path) -> None:
-    if "ra" not in df.columns or "dec" not in df.columns:
-        fig = plt.figure(figsize=(12, 7))
-        plt.text(0.5, 0.5, "Missing ra/dec", ha="center", va="center")
-        plt.axis("off")
-        fig.savefig(out_png, dpi=320, bbox_inches="tight")
-        plt.close(fig)
-        return
+    # Coordinates from ra/dec if available, else use any 2 numeric dims
+    if "ra" in df.columns and "dec" in df.columns:
+        x = pd.to_numeric(df["ra"], errors="coerce").fillna(0.0).to_numpy(float)
+        y = pd.to_numeric(df["dec"], errors="coerce").fillna(0.0).to_numpy(float)
+    else:
+        num_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
+        if len(num_cols) >= 2:
+            x = df[num_cols[0]].to_numpy(float)
+            y = df[num_cols[1]].to_numpy(float)
+        else:
+            fig = plt.figure(figsize=(12, 6))
+            plt.text(0.5, 0.5, "Missing sky coordinates", ha="center", va="center")
+            plt.axis("off")
+            fig.savefig(out_png, dpi=260, bbox_inches="tight")
+            plt.close(fig)
+            return
 
-    ra = pd.to_numeric(df["ra"], errors="coerce").fillna(0.0).to_numpy(float)
-    dec = pd.to_numeric(df["dec"], errors="coerce").fillna(0.0).to_numpy(float)
-    score = df["anomaly_score_norm"].to_numpy(float)
+    s = df["incoherence_score"].to_numpy(float)
+    s01 = robust_unit_interval(s)
 
-    bins = 320
-    xedges = np.linspace(np.nanmin(ra), np.nanmax(ra), bins+1)
-    yedges = np.linspace(np.nanmin(dec), np.nanmax(dec), bins+1)
-    H, _, _ = np.histogram2d(ra, dec, bins=[xedges, yedges])
-    H = _blur2d(H.T, sigma=1.6)
+    # Density image
+    W, H = 1200, 600
+    xi = np.clip(((x - np.nanmin(x)) / (np.nanmax(x) - np.nanmin(x) + 1e-9) * (W - 1)).astype(int), 0, W - 1)
+    yi = np.clip(((y - np.nanmin(y)) / (np.nanmax(y) - np.nanmin(y) + 1e-9) * (H - 1)).astype(int), 0, H - 1)
+    dens = np.zeros((H, W), dtype=float)
+    for X, Y, w in zip(xi.tolist(), yi.tolist(), (0.25 + 1.75 * s01).tolist(), strict=False):
+        dens[Y, X] += w
+    dens = _blur2d(dens, sigma=6.5)
+    dens = dens / (dens.max() + 1e-9)
 
-    fig = plt.figure(figsize=(14, 8))
+    fig = plt.figure(figsize=(14, 7), facecolor="#05060a")
     ax = plt.gca()
-    ax.imshow(H, origin="lower", aspect="auto",
-              extent=[xedges[0], xedges[-1], yedges[0], yedges[-1]],
-              alpha=0.95)
+    ax.set_facecolor("#05060a")
+    ax.imshow(dens, cmap="magma", origin="lower", alpha=0.92)
+    ax.set_xticks([])
+    ax.set_yticks([])
 
-    _glow_scatter(ra, dec, score, s=8, ax=ax)
+    # Stars glow
+    xs = xi.astype(float)
+    ys = yi.astype(float)
+    _glow_scatter(ax, xs, ys, s=6 + 22 * s01, alpha=0.7, color="#9fd0ff")
 
-    if G_opt is not None:
-        G = G_opt
-        comm = community_labels(G)
-        sid = df["source_id"].astype(str) if "source_id" in df.columns else df.index.astype(str)
-        df_idx = dict(zip(sid.tolist(), range(len(df))))
-        d_sorted = df.sort_values("anomaly_score_hi", ascending=False)
-        top_ids = set(d_sorted.head(min(120, len(d_sorted)))["source_id"].astype(str).tolist()) if "source_id" in df.columns else set()
-
-        kept = 0
-        for u, v in G.edges():
+    # Optional graph edges overlay
+    if G_opt is not None and "source_id" in df.columns:
+        sid_to_xy = {str(sid): (float(X), float(Y)) for sid, X, Y in zip(df["source_id"].astype(str), xs, ys, strict=False)}
+        # Keep only a thin subset of edges to avoid clutter
+        try:
+            edges = list(G_opt.edges())
+        except Exception:
+            edges = []
+        rng = np.random.default_rng(42)
+        if len(edges) > 2500:
+            idx = rng.choice(len(edges), size=2500, replace=False)
+            edges = [edges[i] for i in idx.tolist()]
+        for u, v in edges:
             su, sv = str(u), str(v)
-            if su not in df_idx or sv not in df_idx:
-                continue
-            if comm.get(su, -1) != comm.get(sv, -2) and not (su in top_ids or sv in top_ids):
-                continue
-            if kept > 2200:
-                break
-            iu, iv = df_idx[su], df_idx[sv]
-            x1, y1 = ra[iu], dec[iu]
-            x2, y2 = ra[iv], dec[iv]
-            mx, my = 0.5*(x1+x2), 0.5*(y1+y2)
-            dx, dy = (x2-x1), (y2-y1)
-            norm = math.hypot(dx, dy) + 1e-9
-            px, py = (-dy/norm, dx/norm)
-            offset = 0.08 * norm
-            cx, cy = mx + px*offset, my + py*offset
-            t = np.linspace(0, 1, 20)
-            bx = (1-t)**2 * x1 + 2*(1-t)*t * cx + t**2 * x2
-            by = (1-t)**2 * y1 + 2*(1-t)*t * cy + t**2 * y2
-            w = 0.6 if (su in top_ids or sv in top_ids) else 0.35
-            a = 0.22 if (su in top_ids or sv in top_ids) else 0.12
-            ax.plot(bx, by, linewidth=w, alpha=a)
-            kept += 1
+            if su in sid_to_xy and sv in sid_to_xy:
+                x0, y0 = sid_to_xy[su]
+                x1, y1 = sid_to_xy[sv]
+                ax.plot([x0, x1], [y0, y1], color="#2a3a66", alpha=0.10, linewidth=0.6)
 
-    ax.set_title("Hidden Constellations (Gaia graph reinterpretation)")
-    ax.set_xlabel("RA [deg]")
-    ax.set_ylabel("Dec [deg]")
-    ax.grid(alpha=0.10)
+    ax.set_title("Sky map anomalies", color="#eaeaea", pad=14)
     fig.savefig(out_png, dpi=320, bbox_inches="tight")
     plt.close(fig)
 
 
-def export_celestial_sphere(df: pd.DataFrame, out_html: Path) -> None:
+def export_celestial_sphere(
+    df: pd.DataFrame,
+    out_html: Path,
+    color_mode: str,
+    phi_prefix: str,
+    phi_weights: str,
+    rgb_phis: str,
+) -> None:
     if not _HAS_PLOTLY:
         out_html.write_text("Plotly not installed. Install requirements_viz.txt.", encoding="utf-8")
         return
@@ -310,307 +492,134 @@ def export_celestial_sphere(df: pd.DataFrame, out_html: Path) -> None:
         out_html.write_text("Missing ra/dec in scored.csv", encoding="utf-8")
         return
 
-    ra = np.deg2rad(pd.to_numeric(df["ra"], errors="coerce").fillna(0.0).to_numpy(float))
-    dec = np.deg2rad(pd.to_numeric(df["dec"], errors="coerce").fillna(0.0).to_numpy(float))
+    df2, cmap = _prepare_incoherence(df, color_mode, phi_prefix, phi_weights, rgb_phis)
+
+    ra = np.deg2rad(pd.to_numeric(df2["ra"], errors="coerce").fillna(0.0).to_numpy(float))
+    dec = np.deg2rad(pd.to_numeric(df2["dec"], errors="coerce").fillna(0.0).to_numpy(float))
 
     x = np.cos(dec) * np.cos(ra)
     y = np.cos(dec) * np.sin(ra)
     z = np.sin(dec)
 
-    score = df["anomaly_score_norm"].to_numpy(float)
-    size = 3 + 10*score
+    score = df2["incoherence_score"].to_numpy(float)
+    size = 3 + 10 * score
 
-    hover_cols = [c for c in ["source_id","anomaly_score_hi","phot_g_mean_mag","bp_rp","parallax","pmra","pmdec","ruwe"] if c in df.columns]
-    hover = df[hover_cols].astype(str).agg("<br>".join, axis=1) if hover_cols else None
+    hover_cols = [c for c in ["source_id", "anomaly_score_hi", "incoherence_score", "incoherence_dominant", "phot_g_mean_mag", "bp_rp", "parallax", "pmra", "pmdec", "ruwe"] if c in df2.columns]
+    hover = df2[hover_cols].astype(str).agg("<br>".join, axis=1) if hover_cols else None
 
-    fig = go.Figure(data=[go.Scatter3d(
-        x=x, y=y, z=z,
-        mode="markers",
-        marker=dict(size=size, color=score, opacity=0.85),
-        text=hover
-    )])
+    mode = (color_mode or "score").strip().lower()
+
+    fig = go.Figure()
+
+    if mode == "dominant_phi" and ("incoherence_dominant" in df2.columns) and df2["incoherence_dominant"].astype(str).str.len().gt(0).any():
+        dom = df2["incoherence_dominant"].astype(str).to_numpy()
+        uniq = sorted(set(dom.tolist()))
+        for name in uniq:
+            mask = dom == name
+            col = cmap.get(name, "#9fd0ff")
+            fig.add_trace(go.Scatter3d(
+                x=x[mask], y=y[mask], z=z[mask],
+                mode="markers",
+                name=name,
+                marker=dict(size=size[mask], color=col, opacity=0.85),
+                text=hover[mask] if hover is not None else None,
+                hoverinfo="text",
+            ))
+        title = "Celestial sphere 3D, dominant incoherence"
+    elif mode == "rgb_phi" and ("incoherence_rgb" in df2.columns) and df2["incoherence_rgb"].astype(str).str.len().gt(0).any():
+        colors = df2["incoherence_rgb"].astype(str).to_list()
+        fig.add_trace(go.Scatter3d(
+            x=x, y=y, z=z,
+            mode="markers",
+            marker=dict(size=size, color=colors, opacity=0.85),
+            text=hover,
+            hoverinfo="text",
+            name="rgb_phi",
+        ))
+        title = "Celestial sphere 3D, RGB incoherence mix"
+    else:
+        fig.add_trace(go.Scatter3d(
+            x=x, y=y, z=z,
+            mode="markers",
+            marker=dict(size=size, color=score, colorscale="Viridis", opacity=0.85, colorbar=dict(title="incoherence")),
+            text=hover,
+            hoverinfo="text",
+            name="score",
+        ))
+        title = "Celestial sphere 3D, incoherence score"
+
     fig.update_layout(
-        title="Celestial Sphere — anomaly score",
-        scene=dict(xaxis=dict(visible=False), yaxis=dict(visible=False), zaxis=dict(visible=False), aspectmode="data"),
-        margin=dict(l=0, r=0, b=0, t=40),
+        title=title,
+        height=900,
+        dragmode="orbit",
+        scene=dict(
+            xaxis=dict(visible=False),
+            yaxis=dict(visible=False),
+            zaxis=dict(visible=False),
+            aspectmode="cube",
+        ),
+        margin=dict(l=0, r=0, b=0, t=48),
+        legend=dict(itemsizing="constant"),
     )
     plotly_plot(fig, filename=str(out_html), auto_open=False, include_plotlyjs="cdn")
-
-
-
-def parse_weights(spec: str) -> Dict[str, float]:
-    """Parse weights like: "isolation_forest=1,lof=1,ocsvm=1,graph=2.0"."""
-    out: Dict[str, float] = {}
-    spec = (spec or "").strip()
-    if not spec:
-        return out
-    for part in spec.split(","):
-        part = part.strip()
-        if not part:
-            continue
-        if "=" not in part:
-            continue
-        k, v = part.split("=", 1)
-        k = k.strip()
-        try:
-            out[k] = float(v.strip())
-        except Exception:
-            continue
-    return out
-
-
-def _stable_color_from_name(name: str) -> Tuple[int, int, int]:
-    """Deterministic pseudo-random color from a string, avoiding very dark values."""
-    h = hashlib.sha1(name.encode("utf-8")).hexdigest()
-    r = 80 + (int(h[0:2], 16) % 176)
-    g = 80 + (int(h[2:4], 16) % 176)
-    b = 80 + (int(h[4:6], 16) % 176)
-    return int(r), int(g), int(b)
-
-
-def constraint_base_rgb(name: str) -> Tuple[int, int, int]:
-    """Palette for constraint/engine names. Unknown names get a stable hashed color."""
-    n = (name or "").lower()
-    palette = {
-        "isolation_forest": (230, 70, 70),   # red
-        "lof": (80, 210, 120),               # green
-        "ocsvm": (80, 140, 230),             # blue
-        "robust_zscore": (210, 90, 210),     # magenta
-        "pineforest": (80, 210, 210),        # cyan
-        "graph": (240, 220, 60),             # yellow
-    }
-    return palette.get(n, _stable_color_from_name(name))
-
-
-def mix_rgb(a: Tuple[int, int, int], b: Tuple[int, int, int], t: float) -> Tuple[int, int, int]:
-    t = float(max(0.0, min(1.0, t)))
-    return (
-        int(round(a[0] * (1 - t) + b[0] * t)),
-        int(round(a[1] * (1 - t) + b[1] * t)),
-        int(round(a[2] * (1 - t) + b[2] * t)),
-    )
-
-
-def rgb_str(rgb: Tuple[int, int, int]) -> str:
-    r, g, b = rgb
-    r = int(max(0, min(255, r)))
-    g = int(max(0, min(255, g)))
-    b = int(max(0, min(255, b)))
-    return f"rgb({r},{g},{b})"
 
 
 def export_network_explorer(
     df: pd.DataFrame,
     G_opt,
     out_html: Path,
-    *,
-    color_mode: str = "auto",
-    phi_prefix: str = "phi_",
-    phi_weights: str = "",
-    phi_active_threshold: float = 0.65,
+    color_mode: str,
+    phi_prefix: str,
+    phi_weights: str,
+    rgb_phis: str,
     max_nodes: int = 1200,
-    score_col: str = "",
 ) -> None:
-    """Interactive network explorer (PyVis).
-
-    color_mode:
-      - "score": single score gradient (default legacy look)
-      - "dominant": color by dominant constraint, intensity by score
-      - "blend": blend multiple constraints into one mixed color, intensity by score
-      - "border_dominant": background by score, border by dominant constraint, border width by #active constraints
-      - "auto": if phi_* columns exist -> "border_dominant" else "score"
-    """
     if not _HAS_PYVIS:
         out_html.write_text("PyVis not installed. Install requirements_viz.txt.", encoding="utf-8")
         return
     if G_opt is None:
-        out_html.write_text("No graph provided (graph_full/union.graphml).", encoding="utf-8")
+        out_html.write_text("No graph provided (graph_full or union.graphml).", encoding="utf-8")
         return
 
+    df2, cmap = _prepare_incoherence(df, color_mode, phi_prefix, phi_weights, rgb_phis)
     G = G_opt
-    nodes_keep, edges_keep = sample_subgraph(G, df, max_nodes=int(max_nodes))
+    nodes_keep, edges_keep = sample_subgraph(G, df2, max_nodes=int(max_nodes))
 
-    d = df.copy()
+    d = df2.copy()
     if "source_id" not in d.columns:
         d["source_id"] = d.index.astype(str)
-    d["source_id"] = d["source_id"].astype(str)
     d = d.set_index("source_id", drop=False)
 
-    # Detect phi columns for multi-constraint color
-    phi_prefix = (phi_prefix or "phi_").strip()
-    phi_cols = [c for c in d.columns if isinstance(c, str) and c.startswith(phi_prefix)]
-    w_map = parse_weights(phi_weights)
-    if phi_cols and color_mode == "auto":
-        color_mode = "border_dominant"
-    if not phi_cols and color_mode == "auto":
-        color_mode = "score"
-
-    # Score column selection for intensity
-    if score_col:
-        score_col = score_col.strip()
-    if not score_col:
-        score_col = "incoherence_score_norm" if "incoherence_score_norm" in d.columns else "anomaly_score_norm"
-    if score_col not in d.columns:
-        score_col = "anomaly_score_norm" if "anomaly_score_norm" in d.columns else ""
-
-    # Make HTML self-contained when possible
-    try:
-        net = Network(
-            height="820px",
-            width="100%",
-            bgcolor="#05060a",
-            font_color="#e8e8e8",
-            directed=False,
-            cdn_resources="in_line",
-        )
-    except TypeError:
-        net = Network(height="820px", width="100%", bgcolor="#05060a", font_color="#e8e8e8", directed=False)
-
+    net = Network(height="820px", width="100%", bgcolor="#05060a", font_color="#e8e8e8", directed=False)
     net.force_atlas_2based(gravity=-30, central_gravity=0.01, spring_length=110, spring_strength=0.08, damping=0.4)
 
-    dark_bg = (18, 20, 30)
-    # legacy gradient anchors: low -> blue, high -> yellow
-    low_rgb = (45, 95, 220)
-    hi_rgb = (245, 220, 60)
+    mode = (color_mode or "score").strip().lower()
 
     for sid in nodes_keep:
         row = d.loc[sid] if sid in d.index else None
-
-        sc = 0.2
-        if row is not None and score_col and score_col in row.index:
-            try:
-                sc = float(row[score_col])
-            except Exception:
-                sc = 0.2
-        sc = float(max(0.0, min(1.0, sc)))
-
-        # label only very high score to avoid clutter
-        label = sid if sc > 0.92 else ""
+        sc = float(row["incoherence_score"]) if row is not None and "incoherence_score" in row else 0.2
         size = 10 + 30 * sc
-
-        title_parts: List[str] = []
+        label = sid if sc > 0.92 else ""
+        title_parts = []
         if row is not None:
-            cols = [
-                "source_id",
-                "anomaly_score",
-                "anomaly_score_hi",
-                "incoherence_score",
-                "phot_g_mean_mag",
-                "bp_rp",
-                "parallax",
-                "pmra",
-                "pmdec",
-                "ruwe",
-                "degree",
-                "kcore",
-                "betweenness",
-                "community_id",
-            ]
+            cols = ["source_id", "anomaly_score_hi", "incoherence_score", "incoherence_dominant", "phot_g_mean_mag", "bp_rp", "parallax", "pmra", "pmdec", "ruwe", "degree", "kcore", "betweenness"]
             for c in cols:
                 if c in row.index:
                     title_parts.append(f"{c}: {row[c]}")
-
-            if phi_cols:
-                contribs: List[Tuple[str, float, float]] = []
-                for c in phi_cols:
-                    name = c[len(phi_prefix):]
-                    try:
-                        phi = float(row[c])
-                    except Exception:
-                        phi = 0.0
-                    phi = float(max(0.0, min(1.0, phi)))
-                    w = float(w_map.get(name, 1.0))
-                    contribs.append((name, w, w * phi))
-                contribs.sort(key=lambda t: t[2], reverse=True)
-                top = contribs[:6]
-                title_parts.append("constraints:")
-                for name, w, wp in top:
-                    title_parts.append(f"  {name}: w={w:.3g} contrib={wp:.3g}")
-
         title = "<br>".join(title_parts) if title_parts else sid
 
-        # Compute dominant constraint + blended color
-        dominant_name = ""
-        active_cnt = 0
-        blend_vec = np.zeros(3, dtype=float)
-        total_contrib = 0.0
+        if mode == "dominant_phi" and row is not None:
+            dom = str(row.get("incoherence_dominant", ""))
+            color = cmap.get(dom, "#9fd0ff")
+        elif mode == "rgb_phi" and row is not None:
+            color = str(row.get("incoherence_rgb", "rgb(160,160,255)")) or "rgb(160,160,255)"
+        else:
+            r = int(40 + 215 * sc)
+            g = int(80 + 150 * sc)
+            b = int(220 - 160 * sc)
+            color = f"rgb({r},{g},{b})"
 
-        if row is not None and phi_cols:
-            for c in phi_cols:
-                name = c[len(phi_prefix):]
-                try:
-                    phi = float(row[c])
-                except Exception:
-                    phi = 0.0
-                phi = float(max(0.0, min(1.0, phi)))
-                w = float(w_map.get(name, 1.0))
-                contrib = w * phi
-                if phi >= float(phi_active_threshold):
-                    active_cnt += 1
-                if contrib > total_contrib:
-                    pass
-                rgb = np.array(constraint_base_rgb(name), dtype=float)
-                blend_vec += contrib * rgb
-                total_contrib += contrib
-
-            # dominant constraint for border or categorical mode
-            best = None
-            best_val = -1.0
-            for c in phi_cols:
-                name = c[len(phi_prefix):]
-                try:
-                    phi = float(row[c])
-                except Exception:
-                    phi = 0.0
-                phi = float(max(0.0, min(1.0, phi)))
-                w = float(w_map.get(name, 1.0))
-                v = w * phi
-                if v > best_val:
-                    best_val = v
-                    best = name
-            dominant_name = best or ""
-
-        # Default score gradient (legacy look)
-        score_rgb = mix_rgb(low_rgb, hi_rgb, sc)
-
-        if color_mode == "score" or not phi_cols:
-            node_color = rgb_str(score_rgb)
-            net.add_node(sid, label=label, title=title, value=size, color=node_color)
-            continue
-
-        if color_mode == "dominant":
-            base = constraint_base_rgb(dominant_name or "graph")
-            bg = mix_rgb(dark_bg, base, sc)
-            net.add_node(sid, label=label, title=title, value=size, color=rgb_str(bg))
-            continue
-
-        if color_mode == "blend":
-            if total_contrib <= 1e-12:
-                mixed = score_rgb
-            else:
-                mixed = (blend_vec / total_contrib).clip(0, 255)
-                mixed = tuple(int(round(x)) for x in mixed.tolist())
-            bg = mix_rgb(dark_bg, mixed, sc)
-            net.add_node(sid, label=label, title=title, value=size, color=rgb_str(bg))
-            continue
-
-        if color_mode == "border_dominant":
-            border = rgb_str(constraint_base_rgb(dominant_name or "graph"))
-            background = rgb_str(score_rgb)
-            bw = 1 + 2 * int(min(3, max(0, active_cnt)))
-            net.add_node(
-                sid,
-                label=label,
-                title=title,
-                value=size,
-                color={"background": background, "border": border},
-                borderWidth=bw,
-                borderWidthSelected=max(3, bw),
-            )
-            continue
-
-        # fallback
-        net.add_node(sid, label=label, title=title, value=size, color=rgb_str(score_rgb))
+        net.add_node(sid, label=label, title=title, value=size, color=color)
 
     for u, v in edges_keep:
         net.add_edge(u, v, value=1)
@@ -618,161 +627,172 @@ def export_network_explorer(
     net.save_graph(str(out_html))
 
 
-def load_lime_matrix(explain_jsonl: Path, top_ids: List[str]) -> Optional[Tuple[List[str], List[str], np.ndarray]]:
-    if not explain_jsonl.exists():
-        return None
+def load_lime_matrix(explain_path: Optional[Path]) -> Tuple[np.ndarray, List[str], List[str]]:
+    if explain_path is None or not explain_path.exists():
+        return np.zeros((0, 0), dtype=float), [], []
     rows = []
+    ids = []
     feats_set = set()
-    try:
-        with explain_jsonl.open("r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
+    with explain_path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
                 obj = json.loads(line)
-                sid = str(obj.get("source_id", ""))
-                if sid not in set(top_ids):
+            except Exception:
+                continue
+            sid = str(obj.get("source_id", ""))
+            lime = obj.get("lime") or {}
+            weights = lime.get("weights") or []
+            if not sid or not isinstance(weights, list):
+                continue
+            d = {}
+            for w in weights:
+                if not isinstance(w, dict):
                     continue
-                lime = obj.get("lime") or obj.get("lime_weights") or obj.get("explanation")
-                if lime is None:
+                feat = w.get("feature")
+                val = w.get("weight")
+                if feat is None:
                     continue
-                if isinstance(lime, list):
-                    pairs = []
-                    for it in lime:
-                        if isinstance(it, (list, tuple)) and len(it) >= 2:
-                            pairs.append((str(it[0]), float(it[1])))
-                    if not pairs:
-                        continue
-                    for k, _ in pairs:
-                        feats_set.add(k)
-                    rows.append((sid, pairs))
-        if not rows or not feats_set:
-            return None
-        feat_list = sorted(feats_set)
-        M = np.zeros((len(rows), len(feat_list)), dtype=float)
-        for i, (sid, pairs) in enumerate(rows):
-            w = dict(pairs)
-            for j, feat in enumerate(feat_list):
-                M[i, j] = float(w.get(feat, 0.0))
-        sid_list = [r[0] for r in rows]
-        return sid_list, feat_list, M
-    except Exception:
-        return None
+                try:
+                    val_f = float(val)
+                except Exception:
+                    continue
+                d[str(feat)] = val_f
+                feats_set.add(str(feat))
+            if d:
+                rows.append(d)
+                ids.append(sid)
+
+    feats = sorted(feats_set)
+    if not feats or not rows:
+        return np.zeros((0, 0), dtype=float), [], []
+
+    M = np.zeros((len(rows), len(feats)), dtype=float)
+    for i, d in enumerate(rows):
+        for j, feat in enumerate(feats):
+            if feat in d:
+                M[i, j] = float(d[feat])
+    return M, ids, feats
 
 
-def plot_explainability_heatmap(df: pd.DataFrame, explain_jsonl: Optional[Path], out_png: Path, top_n: int = 40) -> None:
-    d = df.copy()
-    if "source_id" not in d.columns:
-        d["source_id"] = d.index.astype(str)
-    d = d.sort_values("anomaly_score_hi", ascending=False).head(min(top_n, len(d)))
-    top_ids = d["source_id"].astype(str).tolist()
+def plot_explainability_heatmap(df: pd.DataFrame, explain_path: Optional[Path], out_png: Path, top_n: int = 40) -> None:
+    M, ids, feats = load_lime_matrix(explain_path)
+    if M.size == 0:
+        # fallback: robust z scores on numeric columns
+        ignore = {"source_id"}
+        num_cols = [c for c in df.columns if c not in ignore and pd.api.types.is_numeric_dtype(df[c])]
+        cols = [c for c in num_cols if c not in ["anomaly_score", "anomaly_score_hi", "anomaly_score_norm"]][: min(20, len(num_cols))]
+        if len(cols) < 2:
+            fig = plt.figure(figsize=(12, 6))
+            plt.text(0.5, 0.5, "No explanations and not enough numeric columns", ha="center", va="center")
+            plt.axis("off")
+            fig.savefig(out_png, dpi=260, bbox_inches="tight")
+            plt.close(fig)
+            return
 
-    lime = None
-    if explain_jsonl is not None:
-        lime = load_lime_matrix(explain_jsonl, top_ids)
+        X = df[cols].apply(pd.to_numeric, errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0).to_numpy(float)
+        Z = np.column_stack([robust_z(X[:, j]) for j in range(X.shape[1])])
+        # Select top anomalies
+        idx = np.argsort(-df["incoherence_score"].to_numpy(float))[: min(top_n, len(df))]
+        Zs = Z[idx, :]
+        fig = plt.figure(figsize=(12, 8))
+        plt.imshow(Zs, aspect="auto", cmap="coolwarm", vmin=-4, vmax=4)
+        plt.yticks(range(len(idx)), df.iloc[idx]["source_id"].astype(str).tolist(), fontsize=6)
+        plt.xticks(range(len(cols)), cols, rotation=75, fontsize=8)
+        plt.title("Explainability heatmap, fallback robust z scores")
+        plt.colorbar(label="robust z")
+        fig.savefig(out_png, dpi=320, bbox_inches="tight")
+        plt.close(fig)
+        return
 
-    if lime is not None:
-        sid_list, feat_list, M = lime
-        title = "Explainability heatmap (LIME weights)"
-        data = M
-        ylabels = sid_list
-        xlabels = feat_list
-    else:
-        num_cols = [c for c in d.columns if pd.api.types.is_numeric_dtype(d[c]) and c not in ("anomaly_label",)]
-        preferred = [c for c in ["phot_g_mean_mag","bp_rp","parallax","pmra","pmdec","distance","ruwe","degree","kcore","betweenness"] if c in num_cols]
-        cols = preferred if len(preferred) >= 6 else num_cols[:12]
-        Z = np.vstack([robust_z(pd.to_numeric(d[c], errors="coerce").fillna(0.0).to_numpy(float)) for c in cols]).T
-        title = "Explainability heatmap (fallback: robust z-scores)"
-        data = Z
-        ylabels = top_ids
-        xlabels = cols
+    # Use LIME matrix
+    # Order rows by incoherence score if possible
+    df_id = df.copy()
+    if "source_id" not in df_id.columns:
+        df_id["source_id"] = df_id.index.astype(str)
+    df_id = df_id.set_index("source_id", drop=False)
+    scores = []
+    for sid in ids:
+        if sid in df_id.index:
+            scores.append(float(df_id.loc[sid].get("incoherence_score", 0.0)))
+        else:
+            scores.append(0.0)
+    order = np.argsort(-np.asarray(scores))
+    order = order[: min(top_n, len(order))]
+    M2 = M[order, :]
+    ids2 = [ids[i] for i in order.tolist()]
 
-    fig = plt.figure(figsize=(max(12, 0.55*len(xlabels)), max(7, 0.26*len(ylabels))))
-    ax = plt.gca()
-    im = ax.imshow(data, aspect="auto")
-    ax.set_title(title)
-    ax.set_xlabel("features")
-    ax.set_ylabel("top anomalies")
-    ax.set_xticks(range(len(xlabels)))
-    ax.set_xticklabels(xlabels, rotation=45, ha="right")
-    ax.set_yticks(range(len(ylabels)))
-    ax.set_yticklabels(ylabels)
-    plt.colorbar(im, ax=ax, shrink=0.7)
+    # Keep top features by variance
+    v = np.var(M2, axis=0)
+    feat_order = np.argsort(-v)
+    feat_order = feat_order[: min(25, len(feat_order))]
+    M3 = M2[:, feat_order]
+    feats3 = [feats[i] for i in feat_order.tolist()]
+
+    fig = plt.figure(figsize=(12, 8))
+    plt.imshow(M3, aspect="auto", cmap="coolwarm", vmin=-0.8, vmax=0.8)
+    plt.yticks(range(len(ids2)), ids2, fontsize=6)
+    plt.xticks(range(len(feats3)), feats3, rotation=75, fontsize=8)
+    plt.title("Explainability heatmap, LIME weights")
+    plt.colorbar(label="weight")
     fig.savefig(out_png, dpi=320, bbox_inches="tight")
     plt.close(fig)
 
 
 def plot_feature_interaction_heatmap(df: pd.DataFrame, out_png: Path) -> None:
-    num_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
-    preferred = [c for c in ["phot_g_mean_mag","bp_rp","parallax","pmra","pmdec","distance","ruwe","degree","kcore","betweenness"] if c in num_cols]
-    cols = preferred if len(preferred) >= 6 else num_cols[:12]
+    ignore = {"source_id", "incoherence_dominant", "incoherence_rgb"}
+    num_cols = [c for c in df.columns if c not in ignore and pd.api.types.is_numeric_dtype(df[c])]
+    preferred = [c for c in ["phot_g_mean_mag", "bp_rp", "parallax", "pmra", "pmdec", "ruwe", "degree", "betweenness"] if c in num_cols]
+    cols = preferred if len(preferred) >= 4 else num_cols[: min(8, len(num_cols))]
     if len(cols) < 2:
-        fig = plt.figure(figsize=(10, 6))
+        fig = plt.figure(figsize=(12, 6))
         plt.text(0.5, 0.5, "Not enough numeric columns", ha="center", va="center")
         plt.axis("off")
-        fig.savefig(out_png, dpi=320, bbox_inches="tight")
+        fig.savefig(out_png, dpi=260, bbox_inches="tight")
         plt.close(fig)
         return
 
-    X = df[cols].apply(pd.to_numeric, errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0)
-    C = X.corr(method="spearman").to_numpy(float)
-
+    X = df[cols].apply(pd.to_numeric, errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0).to_numpy(float)
+    C = np.corrcoef(X.T)
     fig = plt.figure(figsize=(10, 8))
-    ax = plt.gca()
-    im = ax.imshow(C, aspect="auto")
-    ax.set_title("Feature interaction heatmap (Spearman)")
-    ax.set_xticks(range(len(cols)))
-    ax.set_xticklabels(cols, rotation=45, ha="right")
-    ax.set_yticks(range(len(cols)))
-    ax.set_yticklabels(cols)
-    plt.colorbar(im, ax=ax, shrink=0.8)
+    plt.imshow(C, cmap="viridis", vmin=-1, vmax=1)
+    plt.xticks(range(len(cols)), cols, rotation=70, fontsize=8)
+    plt.yticks(range(len(cols)), cols, fontsize=8)
+    plt.title("Feature interaction heatmap, correlation")
+    plt.colorbar(label="corr")
     fig.savefig(out_png, dpi=320, bbox_inches="tight")
     plt.close(fig)
 
 
 def export_proper_motion_trails(df: pd.DataFrame, out_gif: Path, top_k: int = 30, frames: int = 24) -> None:
     if not _HAS_IMAGEIO:
-        out_gif.write_text("imageio not installed. Install requirements_viz.txt.", encoding="utf-8")
+        out_gif.write_bytes(b"imageio not installed")
         return
-    needed = {"ra","dec","pmra","pmdec"}
-    if not needed.issubset(set(df.columns)):
-        out_gif.write_text("Missing ra/dec/pmra/pmdec for trails.", encoding="utf-8")
+    if "pmra" not in df.columns or "pmdec" not in df.columns:
+        out_gif.write_bytes(b"Missing pmra or pmdec")
         return
 
-    d = df.sort_values("anomaly_score_hi", ascending=False).head(min(top_k, len(df))).copy()
-    ra0 = pd.to_numeric(d["ra"], errors="coerce").fillna(0.0).to_numpy(float)
-    dec0 = pd.to_numeric(d["dec"], errors="coerce").fillna(0.0).to_numpy(float)
+    d = df.copy()
+    d = d.sort_values("incoherence_score", ascending=False).head(top_k)
     pmra = pd.to_numeric(d["pmra"], errors="coerce").fillna(0.0).to_numpy(float)
     pmdec = pd.to_numeric(d["pmdec"], errors="coerce").fillna(0.0).to_numpy(float)
-    score = d["anomaly_score_norm"].to_numpy(float)
+    s = d["incoherence_score"].to_numpy(float)
 
-    mas2deg = 1.0 / 3.6e6
-    cosd = np.cos(np.deg2rad(np.clip(dec0, -89.9, 89.9)))
-    dra_deg_per_yr = (pmra * mas2deg) / np.maximum(cosd, 1e-3)
-    ddec_deg_per_yr = pmdec * mas2deg
-
-    T = 8.0
-    ts = np.linspace(0.0, T, frames)
-
+    # Simulate trails from origin
     imgs = []
-    for t in ts:
-        fig = plt.figure(figsize=(10, 6))
+    t = np.linspace(0.0, 1.0, frames)
+    for tt in t:
+        fig = plt.figure(figsize=(6, 6), facecolor="#05060a")
         ax = plt.gca()
-        ax.scatter(ra0, dec0, s=20, alpha=0.18)
-        steps = 20
-        tt = np.linspace(max(0.0, t-2.0), t, steps)
-        for i in range(len(ra0)):
-            ra_tr = ra0[i] + dra_deg_per_yr[i]*tt
-            dec_tr = dec0[i] + ddec_deg_per_yr[i]*tt
-            ax.plot(ra_tr, dec_tr, alpha=0.35 + 0.4*score[i], linewidth=1.0 + 1.2*score[i])
-
-        ra_t = ra0 + dra_deg_per_yr*t
-        dec_t = dec0 + ddec_deg_per_yr*t
-        ax.scatter(ra_t, dec_t, s=40 + 140*score, alpha=0.85)
-
-        ax.set_title("Proper motion trails (Top anomalies)")
-        ax.set_xlabel("RA [deg]")
-        ax.set_ylabel("Dec [deg]")
+        ax.set_facecolor("#05060a")
+        ax.scatter(pmra * tt, pmdec * tt, s=30 + 80 * s, c=s, alpha=0.85)
+        ax.axhline(0, color="#334", alpha=0.3)
+        ax.axvline(0, color="#334", alpha=0.3)
+        ax.set_xlabel("pmra * t")
+        ax.set_ylabel("pmdec * t")
+        ax.set_title("Proper motion trails")
         ax.grid(alpha=0.15)
         fig.canvas.draw()
         img = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
@@ -780,69 +800,56 @@ def export_proper_motion_trails(df: pd.DataFrame, out_gif: Path, top_k: int = 30
         imgs.append(img)
         plt.close(fig)
 
-    imageio.mimsave(out_gif, imgs, duration=0.11)
+    imageio.mimsave(str(out_gif), imgs, duration=0.08)
 
 
 def export_feature_biocubes(df: pd.DataFrame, out_html: Path) -> None:
     if not _HAS_PLOTLY:
         out_html.write_text("Plotly not installed. Install requirements_viz.txt.", encoding="utf-8")
         return
-
-    y = df["anomaly_label"].to_numpy(int) if "anomaly_label" in df.columns else np.ones(len(df), dtype=int)
-    an = df[y == -1]
-    no = df[y != -1]
-
-    candidates = [c for c in ["phot_g_mean_mag","bp_rp","parallax","pmra","pmdec","distance","ruwe","degree","kcore","betweenness"]
-                  if c in df.columns and pd.api.types.is_numeric_dtype(df[c])]
-    feats = candidates[:8] if len(candidates) >= 5 else [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])][:6]
-    if len(feats) == 0:
-        out_html.write_text("No numeric features found.", encoding="utf-8")
+    ignore = {"source_id", "incoherence_dominant", "incoherence_rgb"}
+    num_cols = [c for c in df.columns if c not in ignore and pd.api.types.is_numeric_dtype(df[c])]
+    preferred = [c for c in ["phot_g_mean_mag", "bp_rp", "parallax", "pmra", "pmdec", "ruwe", "degree", "betweenness"] if c in num_cols]
+    cols = preferred if len(preferred) >= 3 else num_cols[:3]
+    if len(cols) < 3:
+        out_html.write_text("Not enough numeric columns for biocubes", encoding="utf-8")
         return
 
-    def stats(d: pd.DataFrame, col: str):
-        x = pd.to_numeric(d[col], errors="coerce").replace([np.inf, -np.inf], np.nan).dropna().to_numpy(float)
-        if x.size == 0:
-            return 0.0, 0.0, 0.0
-        q1, med, q3 = np.percentile(x, [25, 50, 75])
-        return float(q1), float(med), float(q3)
+    X = df[cols].apply(pd.to_numeric, errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0).to_numpy(float)
+    for j in range(X.shape[1]):
+        X[:, j] = robust_z(X[:, j])
 
-    meshes = []
-    for i, f in enumerate(feats):
-        for gi, (name, dset) in enumerate([("Normal", no), ("Anomalous", an)]):
-            q1, med, q3 = stats(dset, f)
-            x0, x1 = i - 0.35, i + 0.35
-            y0, y1 = gi - 0.35, gi + 0.35
-            z0, z1 = q1, q3
-
-            vx = [x0,x1,x1,x0,x0,x1,x1,x0]
-            vy = [y0,y0,y1,y1,y0,y0,y1,y1]
-            vz = [z0,z0,z0,z0,z1,z1,z1,z1]
-
-            I = [0,0,0, 4,4,4, 0,0, 1,1, 2,2]
-            J = [1,2,3, 5,6,7, 4,5, 2,6, 3,7]
-            K = [2,3,1, 6,7,5, 5,6, 6,5, 7,6]
-
-            meshes.append(go.Mesh3d(x=vx,y=vy,z=vz, i=I,j=J,k=K, opacity=0.25))
-            meshes.append(go.Scatter3d(x=[i], y=[gi], z=[med], mode="markers", marker=dict(size=5), name=f"{f} {name}"))
-
-    fig = go.Figure(data=meshes)
+    score = df["incoherence_score"].to_numpy(float)
+    fig = go.Figure(data=[go.Scatter3d(
+        x=X[:, 0], y=X[:, 1], z=X[:, 2],
+        mode="markers",
+        marker=dict(size=4 + 10 * score, color=score, colorscale="Viridis", opacity=0.86, colorbar=dict(title="incoherence")),
+        text=df.get("source_id", pd.Series(range(len(df)))).astype(str),
+        hoverinfo="text",
+    )])
     fig.update_layout(
-        title="Feature BioCubes (IQR boxes + median markers)",
-        scene=dict(
-            xaxis=dict(title="feature index", tickmode="array", tickvals=list(range(len(feats))), ticktext=feats),
-            yaxis=dict(title="group", tickmode="array", tickvals=[0,1], ticktext=["Normal","Anomalous"]),
-            zaxis=dict(title="value"),
-        ),
-        margin=dict(l=0, r=0, b=0, t=40),
-        showlegend=False
+        title=f"BioCubes 3D feature space: {cols[0]}, {cols[1]}, {cols[2]}",
+        height=900,
+        margin=dict(l=0, r=0, b=0, t=48),
+        scene=dict(xaxis=dict(title=cols[0]), yaxis=dict(title=cols[1]), zaxis=dict(title=cols[2]), aspectmode="cube"),
     )
     plotly_plot(fig, filename=str(out_html), auto_open=False, include_plotlyjs="cdn")
 
 
-def export_umap(df: pd.DataFrame, out_png: Path, out_html: Path) -> None:
-    ignore = {"source_id"}
-    num_cols = [c for c in df.columns if c not in ignore and pd.api.types.is_numeric_dtype(df[c])]
-    preferred = [c for c in ["phot_g_mean_mag","bp_rp","parallax","pmra","pmdec","distance","ruwe","degree","kcore","betweenness"] if c in num_cols]
+def export_umap(
+    df: pd.DataFrame,
+    out_png: Path,
+    out_html: Path,
+    color_mode: str,
+    phi_prefix: str,
+    phi_weights: str,
+    rgb_phis: str,
+) -> None:
+    df2, cmap = _prepare_incoherence(df, color_mode, phi_prefix, phi_weights, rgb_phis)
+
+    ignore = {"source_id", "incoherence_dominant", "incoherence_rgb"}
+    num_cols = [c for c in df2.columns if c not in ignore and pd.api.types.is_numeric_dtype(df2[c])]
+    preferred = [c for c in ["phot_g_mean_mag", "bp_rp", "parallax", "pmra", "pmdec", "distance", "ruwe", "degree", "kcore", "betweenness"] if c in num_cols]
     cols = preferred if len(preferred) >= 5 else num_cols[:8]
     if len(cols) < 2:
         fig = plt.figure(figsize=(10, 6))
@@ -853,7 +860,7 @@ def export_umap(df: pd.DataFrame, out_png: Path, out_html: Path) -> None:
         out_html.write_text("Not enough numeric columns for UMAP", encoding="utf-8")
         return
 
-    X = df[cols].apply(pd.to_numeric, errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0).to_numpy(float)
+    X = df2[cols].apply(pd.to_numeric, errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0).to_numpy(float)
     for j in range(X.shape[1]):
         X[:, j] = robust_z(X[:, j])
 
@@ -864,29 +871,206 @@ def export_umap(df: pd.DataFrame, out_png: Path, out_html: Path) -> None:
         U, S, _ = np.linalg.svd(X, full_matrices=False)
         emb = U[:, :2] * S[:2]
 
-    score = df["anomaly_score_norm"].to_numpy(float)
+    mode = (color_mode or "score").strip().lower()
+    score = df2["incoherence_score"].to_numpy(float)
+
     fig = plt.figure(figsize=(10, 8))
-    plt.scatter(emb[:, 0], emb[:, 1], s=18, alpha=0.78, c=score)
+    if mode == "dominant_phi" and df2["incoherence_dominant"].astype(str).str.len().gt(0).any():
+        dom = df2["incoherence_dominant"].astype(str).to_numpy()
+        for name, col in cmap.items():
+            mask = dom == name
+            plt.scatter(emb[mask, 0], emb[mask, 1], s=18, alpha=0.78, c=col, label=name)
+        plt.legend(loc="best", fontsize=8, frameon=False)
+    elif mode == "rgb_phi" and df2["incoherence_rgb"].astype(str).str.len().gt(0).any():
+        colors = df2["incoherence_rgb"].astype(str).to_list()
+        plt.scatter(emb[:, 0], emb[:, 1], s=18, alpha=0.78, c=colors)
+    else:
+        plt.scatter(emb[:, 0], emb[:, 1], s=18, alpha=0.78, c=score)
+        plt.colorbar(label="incoherence_score")
+
     plt.title("Cosmic cloud embedding (UMAP if available)")
-    plt.xlabel("dim-1")
-    plt.ylabel("dim-2")
+    plt.xlabel("dim 1")
+    plt.ylabel("dim 2")
     plt.grid(alpha=0.15)
-    plt.colorbar(label="anomaly_score_norm")
     fig.savefig(out_png, dpi=320, bbox_inches="tight")
     plt.close(fig)
 
     if _HAS_PLOTLY:
-        hover_cols = [c for c in ["source_id","anomaly_score_hi","phot_g_mean_mag","bp_rp","parallax","pmra","pmdec","ruwe"] if c in df.columns]
-        hover = df[hover_cols].astype(str).agg("<br>".join, axis=1) if hover_cols else None
-        fig2 = go.Figure(data=[go.Scattergl(
-            x=emb[:, 0], y=emb[:, 1], mode="markers",
-            marker=dict(size=6 + 9*score, color=score, opacity=0.85),
-            text=hover
-        )])
-        fig2.update_layout(title="UMAP cosmic cloud (interactive)", margin=dict(l=0, r=0, b=0, t=40))
+        hover_cols = [c for c in ["source_id", "anomaly_score_hi", "incoherence_score", "incoherence_dominant", "phot_g_mean_mag", "bp_rp", "parallax", "pmra", "pmdec", "ruwe"] if c in df2.columns]
+        hover = df2[hover_cols].astype(str).agg("<br>".join, axis=1) if hover_cols else None
+
+        fig2 = go.Figure()
+        if mode == "dominant_phi" and df2["incoherence_dominant"].astype(str).str.len().gt(0).any():
+            dom = df2["incoherence_dominant"].astype(str).to_numpy()
+            uniq = sorted(set(dom.tolist()))
+            for name in uniq:
+                mask = dom == name
+                col = cmap.get(name, "#9fd0ff")
+                fig2.add_trace(go.Scattergl(
+                    x=emb[mask, 0], y=emb[mask, 1],
+                    mode="markers",
+                    name=name,
+                    marker=dict(size=6 + 9 * score[mask], color=col, opacity=0.85),
+                    text=hover[mask] if hover is not None else None,
+                    hoverinfo="text",
+                ))
+        elif mode == "rgb_phi" and df2["incoherence_rgb"].astype(str).str.len().gt(0).any():
+            colors = df2["incoherence_rgb"].astype(str).to_list()
+            fig2.add_trace(go.Scattergl(
+                x=emb[:, 0], y=emb[:, 1],
+                mode="markers",
+                marker=dict(size=6 + 9 * score, color=colors, opacity=0.85),
+                text=hover,
+                hoverinfo="text",
+                name="rgb_phi",
+            ))
+        else:
+            fig2.add_trace(go.Scattergl(
+                x=emb[:, 0], y=emb[:, 1],
+                mode="markers",
+                marker=dict(size=6 + 9 * score, color=score, colorscale="Viridis", opacity=0.85, colorbar=dict(title="incoherence")),
+                text=hover,
+                hoverinfo="text",
+                name="score",
+            ))
+
+        fig2.update_layout(title="UMAP cosmic cloud (interactive)", height=860, margin=dict(l=0, r=0, b=0, t=48))
         plotly_plot(fig2, filename=str(out_html), auto_open=False, include_plotlyjs="cdn")
     else:
         out_html.write_text("Plotly not installed. Install requirements_viz.txt.", encoding="utf-8")
+
+
+def plot_hr_cmd_outliers(
+    df: pd.DataFrame,
+    out_png: Path,
+    out_html: Optional[Path],
+    color_mode: str,
+    phi_prefix: str,
+    phi_weights: str,
+    rgb_phis: str,
+) -> None:
+    """HR diagram style plot: absolute G magnitude versus BP RP color, highlight incoherent points."""
+    df2, cmap = _prepare_incoherence(df, color_mode, phi_prefix, phi_weights, rgb_phis)
+
+    required = ["phot_g_mean_mag", "bp_rp", "parallax"]
+    if not all(c in df2.columns for c in required):
+        fig = plt.figure(figsize=(10, 6))
+        plt.text(0.5, 0.5, "Missing columns for HR CMD: phot_g_mean_mag, bp_rp, parallax", ha="center", va="center")
+        plt.axis("off")
+        fig.savefig(out_png, dpi=260, bbox_inches="tight")
+        plt.close(fig)
+        if out_html is not None:
+            out_html.write_text("Missing columns for HR CMD", encoding="utf-8")
+        return
+
+    m = pd.to_numeric(df2["phot_g_mean_mag"], errors="coerce").replace([np.inf, -np.inf], np.nan).to_numpy(float)
+    c = pd.to_numeric(df2["bp_rp"], errors="coerce").replace([np.inf, -np.inf], np.nan).to_numpy(float)
+    p = pd.to_numeric(df2["parallax"], errors="coerce").replace([np.inf, -np.inf], np.nan).to_numpy(float)
+
+    # absolute magnitude from parallax in mas: M = m - 10 + 5*log10(parallax_mas)
+    p2 = np.where(p > 0, p, np.nan)
+    Mg = m - 10.0 + 5.0 * np.log10(p2)
+    score = df2["incoherence_score"].to_numpy(float)
+
+    mask_finite = np.isfinite(Mg) & np.isfinite(c)
+    Mg = Mg[mask_finite]
+    cc = c[mask_finite]
+    ss = score[mask_finite]
+
+    mode = (color_mode or "score").strip().lower()
+
+    fig = plt.figure(figsize=(10, 8))
+    ax = plt.gca()
+    ax.set_facecolor("#05060a")
+    fig.patch.set_facecolor("#05060a")
+
+    # background points
+    ax.scatter(cc, Mg, s=6, alpha=0.20, c="#a0a6b8", linewidths=0)
+
+    # highlight top incoherence
+    if len(ss) > 0:
+        topk = min(600, len(ss))
+        idx = np.argsort(-ss)[:topk]
+        if mode == "dominant_phi" and ("incoherence_dominant" in df2.columns) and df2["incoherence_dominant"].astype(str).str.len().gt(0).any():
+            dom_all = df2.loc[mask_finite, "incoherence_dominant"].astype(str).to_numpy()
+            dom = dom_all[idx]
+            for name, col in cmap.items():
+                m2 = dom == name
+                if np.any(m2):
+                    ax.scatter(cc[idx][m2], Mg[idx][m2], s=14, alpha=0.78, c=col, label=name, linewidths=0)
+            ax.legend(loc="best", fontsize=8, frameon=False)
+        elif mode == "rgb_phi" and ("incoherence_rgb" in df2.columns) and df2["incoherence_rgb"].astype(str).str.len().gt(0).any():
+            colors_all = df2.loc[mask_finite, "incoherence_rgb"].astype(str).to_list()
+            colors = [colors_all[i] for i in idx.tolist()]
+            ax.scatter(cc[idx], Mg[idx], s=14, alpha=0.78, c=colors, linewidths=0)
+        else:
+            sc = ax.scatter(cc[idx], Mg[idx], s=14, alpha=0.78, c=ss[idx], cmap="viridis", linewidths=0)
+            plt.colorbar(sc, ax=ax, label="incoherence_score")
+
+    ax.set_title("HR CMD outliers (absolute G vs BP-RP)", color="#eaeaea", pad=12)
+    ax.set_xlabel("BP-RP", color="#eaeaea")
+    ax.set_ylabel("M_G (absolute)", color="#eaeaea")
+    ax.tick_params(colors="#cfd4e6")
+    ax.grid(alpha=0.12, color="#445")
+
+    # brighter at top
+    ax.invert_yaxis()
+
+    fig.savefig(out_png, dpi=320, bbox_inches="tight")
+    plt.close(fig)
+
+    if out_html is not None:
+        if not _HAS_PLOTLY:
+            out_html.write_text("Plotly not installed. Install requirements_viz.txt.", encoding="utf-8")
+            return
+        # Interactive version
+        # reuse finite arrays
+        hover_cols = [c for c in ["source_id", "anomaly_score_hi", "incoherence_score", "incoherence_dominant", "phot_g_mean_mag", "bp_rp", "parallax"] if c in df2.columns]
+        hover = df2.loc[mask_finite, hover_cols].astype(str).agg("<br>".join, axis=1) if hover_cols else None
+
+        fig2 = go.Figure()
+        if mode == "dominant_phi" and ("incoherence_dominant" in df2.columns) and df2["incoherence_dominant"].astype(str).str.len().gt(0).any():
+            dom = df2.loc[mask_finite, "incoherence_dominant"].astype(str).to_numpy()
+            uniq = sorted(set(dom.tolist()))
+            for name in uniq:
+                m3 = dom == name
+                col = cmap.get(name, "#9fd0ff")
+                fig2.add_trace(go.Scattergl(
+                    x=cc[m3], y=Mg[m3],
+                    mode="markers",
+                    name=name,
+                    marker=dict(size=5 + 9 * ss[m3], color=col, opacity=0.85),
+                    text=hover[m3] if hover is not None else None,
+                    hoverinfo="text",
+                ))
+        elif mode == "rgb_phi" and ("incoherence_rgb" in df2.columns) and df2["incoherence_rgb"].astype(str).str.len().gt(0).any():
+            colors = df2.loc[mask_finite, "incoherence_rgb"].astype(str).to_list()
+            fig2.add_trace(go.Scattergl(
+                x=cc, y=Mg,
+                mode="markers",
+                marker=dict(size=5 + 9 * ss, color=colors, opacity=0.85),
+                text=hover,
+                hoverinfo="text",
+                name="rgb_phi",
+            ))
+        else:
+            fig2.add_trace(go.Scattergl(
+                x=cc, y=Mg,
+                mode="markers",
+                marker=dict(size=5 + 9 * ss, color=ss, colorscale="Viridis", opacity=0.85, colorbar=dict(title="incoherence")),
+                text=hover,
+                hoverinfo="text",
+                name="score",
+            ))
+
+        fig2.update_layout(
+            title="HR CMD outliers (interactive)",
+            height=860,
+            margin=dict(l=0, r=0, b=0, t=48),
+            yaxis=dict(autorange="reversed", title="M_G (absolute)"),
+            xaxis=dict(title="BP-RP"),
+        )
+        plotly_plot(fig2, filename=str(out_html), auto_open=False, include_plotlyjs="cdn")
 
 
 def export_dashboard(out_dir: Path) -> None:
@@ -894,34 +1078,36 @@ def export_dashboard(out_dir: Path) -> None:
     html = f"""<!doctype html>
 <html>
 <head>
-<meta charset="utf-8" />
-<title>AstroGraphAnomaly — A→H Gallery</title>
+<meta charset=\"utf-8\" />
+<title>AstroGraphAnomaly A to H Gallery</title>
 <style>
   body {{ background:#07080c; color:#eaeaea; font-family: ui-sans-serif, system-ui; margin: 24px; }}
   a {{ color:#8fb6ff; }}
   .grid {{ display:grid; grid-template-columns: 1fr 1fr; gap: 16px; }}
   .card {{ background:#0d1018; border:1px solid #1b2233; border-radius:14px; padding:14px; }}
   img {{ max-width: 100%; border-radius: 10px; }}
-  h1,h2 {{ margin: 8px 0; }}
+  h1,h2,h3 {{ margin: 8px 0; }}
   .links a {{ margin-right: 14px; }}
 </style>
 </head>
 <body>
-<h1>AstroGraphAnomaly — A→H Gallery</h1>
-<div class="links">
-  <a href="{rel(out_dir/'02_celestial_sphere_3d.html')}">B) Celestial Sphere 3D</a>
-  <a href="{rel(out_dir/'03_network_explorer.html')}">C) Network Explorer</a>
-  <a href="{rel(out_dir/'08_feature_biocubes.html')}">G) BioCubes</a>
-  <a href="{rel(out_dir/'10_umap_cosmic_cloud.html')}">H) UMAP (interactive)</a>
+<h1>AstroGraphAnomaly A to H Gallery</h1>
+<div class=\"links\">
+  <a href=\"{rel(out_dir/'02_celestial_sphere_3d.html')}\">B Celestial Sphere 3D</a>
+  <a href=\"{rel(out_dir/'03_network_explorer.html')}\">C Network Explorer</a>
+  <a href=\"{rel(out_dir/'06_hr_cmd_outliers.html')}\">HR CMD interactive</a>
+  <a href=\"{rel(out_dir/'08_feature_biocubes.html')}\">G BioCubes</a>
+  <a href=\"{rel(out_dir/'10_umap_cosmic_cloud.html')}\">H UMAP interactive</a>
 </div>
 
 <h2>Curated visuals</h2>
-<div class="grid">
-  <div class="card"><h3>A) Hidden Constellations</h3><img src="{rel(out_dir/'01_hidden_constellations_sky.png')}" /></div>
-  <div class="card"><h3>H) UMAP Cosmic Cloud</h3><img src="{rel(out_dir/'09_umap_cosmic_cloud.png')}" /></div>
-  <div class="card"><h3>D) Explainability Heatmap</h3><img src="{rel(out_dir/'04_explainability_heatmap.png')}" /></div>
-  <div class="card"><h3>D) Feature Interaction</h3><img src="{rel(out_dir/'05_feature_interaction_heatmap.png')}" /></div>
-  <div class="card"><h3>F) Proper Motion Trails</h3><img src="{rel(out_dir/'07_proper_motion_trails.gif')}" /></div>
+<div class=\"grid\">
+  <div class=\"card\"><h3>A Sky map anomalies</h3><img src=\"{rel(out_dir/'01_hidden_constellations_sky.png')}\"></div>
+  <div class=\"card\"><h3>H UMAP cosmic cloud</h3><img src=\"{rel(out_dir/'09_umap_cosmic_cloud.png')}\"></div>
+  <div class=\"card\"><h3>HR CMD outliers</h3><img src=\"{rel(out_dir/'06_hr_cmd_outliers.png')}\"></div>
+  <div class=\"card\"><h3>D Explainability heatmap</h3><img src=\"{rel(out_dir/'04_explainability_heatmap.png')}\"></div>
+  <div class=\"card\"><h3>Feature interaction heatmap</h3><img src=\"{rel(out_dir/'05_feature_interaction_heatmap.png')}\"></div>
+  <div class=\"card\"><h3>F Proper motion trails</h3><img src=\"{rel(out_dir/'07_proper_motion_trails.gif')}\"></div>
 </div>
 
 </body>
@@ -931,29 +1117,22 @@ def export_dashboard(out_dir: Path) -> None:
 
 
 def parse_args():
-    ap = argparse.ArgumentParser(description="Generate A→H visualization suite for a run directory.")
-    ap.add_argument("--run-dir", required=True, help="Run directory (outputs will be written under <run-dir>/viz_a_to_h)")
+    ap = argparse.ArgumentParser(description="Generate A to H visualization suite for a run directory.")
+    ap.add_argument("--run-dir", required=True, help="Run directory, outputs will be written under <run-dir>/viz_a_to_h")
     ap.add_argument("--scored", required=True, help="Path to scored.csv")
-    ap.add_argument("--graph", default="", help="Path to graph graphml (optional). If empty, auto-detect in run-dir.")
+    ap.add_argument("--graph", default="", help="Path to graph graphml (optional). If empty, auto detect in run dir.")
     ap.add_argument("--explain", default="", help="Path to explanations.jsonl (optional)")
 
-    # Network explorer options (C)
-    ap.add_argument("--network-color-mode", default="auto",
-                    choices=["auto", "score", "dominant", "blend", "border_dominant"],
-                    help="Color encoding for the interactive network explorer.")
-    ap.add_argument("--network-phi-prefix", default="phi_", help="Prefix for per-constraint columns (ex: phi_lof).")
-    ap.add_argument("--network-phi-weights", default="",
-                    help="Weights like: isolation_forest=1,lof=1,ocsvm=1,graph=2.0")
-    ap.add_argument("--network-phi-active-threshold", type=float, default=0.65,
-                    help="phi >= threshold counts as 'active constraint' (used for border width in border_dominant).")
-    ap.add_argument("--network-max-nodes", type=int, default=1200, help="Max nodes in PyVis explorer (sampling applied).")
-    ap.add_argument("--network-score-col", default="",
-                    help="Optional score column used for intensity. Defaults to incoherence_score_norm then anomaly_score_norm.")
+    ap.add_argument("--color-mode", default="score", choices=["score", "dominant_phi", "rgb_phi"], help="Color mode for sphere, network, UMAP, HR CMD.")
+    ap.add_argument("--phi-prefix", default="phi_", help="Prefix for constraint columns. Default: phi_")
+    ap.add_argument("--phi-weights", default="", help="Weights for constraints, example: graph=2.0,lof=1.0")
+    ap.add_argument("--rgb-phis", default="", help="Three phi columns for rgb_phi, example: graph,lof,ocsvm")
+
+    ap.add_argument("--network-max-nodes", type=int, default=1200, help="Max nodes in PyVis graph explorer")
     return ap.parse_args()
 
 
-
-def main():
+def main() -> int:
     args = parse_args()
     run_dir = Path(args.run_dir)
     scored = Path(args.scored)
@@ -973,26 +1152,17 @@ def main():
         df["community_id"] = df["source_id"].astype(str).map(comm).fillna(-1).astype(int)
 
     plot_hidden_constellations(df, G, out_dir / "01_hidden_constellations_sky.png")
-    export_celestial_sphere(df, out_dir / "02_celestial_sphere_3d.html")
-    export_network_explorer(
-        df,
-        G,
-        out_dir / "03_network_explorer.html",
-        color_mode=args.network_color_mode,
-        phi_prefix=args.network_phi_prefix,
-        phi_weights=args.network_phi_weights,
-        phi_active_threshold=args.network_phi_active_threshold,
-        max_nodes=args.network_max_nodes,
-        score_col=args.network_score_col,
-    )
+    export_celestial_sphere(df, out_dir / "02_celestial_sphere_3d.html", args.color_mode, args.phi_prefix, args.phi_weights, args.rgb_phis)
+    export_network_explorer(df, G, out_dir / "03_network_explorer.html", args.color_mode, args.phi_prefix, args.phi_weights, args.rgb_phis, max_nodes=args.network_max_nodes)
     plot_explainability_heatmap(df, explain, out_dir / "04_explainability_heatmap.png", top_n=40)
     plot_feature_interaction_heatmap(df, out_dir / "05_feature_interaction_heatmap.png")
+    plot_hr_cmd_outliers(df, out_dir / "06_hr_cmd_outliers.png", out_dir / "06_hr_cmd_outliers.html", args.color_mode, args.phi_prefix, args.phi_weights, args.rgb_phis)
     export_proper_motion_trails(df, out_dir / "07_proper_motion_trails.gif", top_k=30, frames=24)
     export_feature_biocubes(df, out_dir / "08_feature_biocubes.html")
-    export_umap(df, out_dir / "09_umap_cosmic_cloud.png", out_dir / "10_umap_cosmic_cloud.html")
+    export_umap(df, out_dir / "09_umap_cosmic_cloud.png", out_dir / "10_umap_cosmic_cloud.html", args.color_mode, args.phi_prefix, args.phi_weights, args.rgb_phis)
     export_dashboard(out_dir)
 
-    print("OK: wrote A→H gallery to:", out_dir)
+    print("OK: wrote A to H gallery to:", out_dir)
     return 0
 
 
