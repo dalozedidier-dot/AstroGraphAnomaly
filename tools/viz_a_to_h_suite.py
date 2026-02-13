@@ -43,11 +43,11 @@ except Exception:
 
 try:
     import plotly.graph_objects as go  # type: ignore
-    from plotly.offline import plot as plotly_plot  # type: ignore
+    import plotly.io as pio  # type: ignore
     _HAS_PLOTLY = True
 except Exception:
     go = None
-    plotly_plot = None
+    pio = None
     _HAS_PLOTLY = False
 
 try:
@@ -316,6 +316,29 @@ def _placeholder_html(path: Path, title: str, msg: str) -> None:
 </head><body><h1>{title}</h1><pre>{msg}</pre></body></html>"""
     path.write_text(html, encoding="utf-8")
 
+
+
+def _write_plotly_html(fig, out_html: Path, title: str) -> None:
+    """Write Plotly HTML robustly for GitHub Actions artifacts and offline viewing.
+
+    Strategy:
+    - include_plotlyjs="directory" writes plotly.min.js once per output directory (small artifacts).
+    - full_html=True embeds the figure JSON so the plot is fully functional offline.
+    """
+    if not _HAS_PLOTLY:
+        _placeholder_html(out_html, title, "Plotly not installed. Install requirements_viz.txt.")
+        return
+    try:
+        out_html.parent.mkdir(parents=True, exist_ok=True)
+        pio.write_html(
+            fig,
+            file=str(out_html),
+            include_plotlyjs="directory",
+            full_html=True,
+            auto_open=False,
+        )
+    except Exception as e:
+        _placeholder_html(out_html, title, f"Plotly export failed: {e}")
 
 def _placeholder_gif(path: Path, title: str, msg: str) -> None:
     if not _HAS_IMAGEIO:
@@ -586,7 +609,7 @@ def export_celestial_sphere(df: pd.DataFrame, out_html: Path) -> None:
         ),
         margin=dict(l=0, r=0, b=0, t=40),
     )
-    plotly_plot(fig, filename=str(out_html), auto_open=False, include_plotlyjs=True)
+    _write_plotly_html(fig, out_html, "Celestial Sphere 3D")
 
 
 def export_network_explorer(df: pd.DataFrame, G_opt, out_html: Path) -> None:
@@ -790,7 +813,7 @@ def plot_feature_interaction_heatmap(df: pd.DataFrame, out_png: Path) -> None:
         hoverinfo="text" if hover is not None else "skip"
     )])
     fig2.update_layout(title="UMAP cosmic cloud (interactive)", margin=dict(l=0, r=0, b=0, t=40))
-    plotly_plot(fig2, filename=str(out_html), auto_open=False, include_plotlyjs=True)
+    _write_plotly_html(fig2, out_html, "plot_feature_interaction_heatmap")
 
 
 
@@ -878,7 +901,7 @@ def plot_hr_cmd_outliers(df: pd.DataFrame, out_png: Path, out_html: Path) -> Non
     fig2.update_layout(title="HR/CMD outliers (interactive)", margin=dict(l=0, r=0, b=0, t=40))
     fig2.update_yaxes(autorange="reversed", title="M_G (absolute)")
     fig2.update_xaxes(title="BP-RP")
-    plotly_plot(fig2, filename=str(out_html), auto_open=False, include_plotlyjs=True)
+    _write_plotly_html(fig2, out_html, "plot_hr_cmd_outliers")
 
 
 def export_dashboard(out_dir: Path) -> None:
@@ -947,6 +970,7 @@ def parse_args():
 
 def main():
     args = parse_args()
+    _require_viz_deps(args.allow_missing_viz_deps)
     run_dir = Path(args.run_dir)
     scored = Path(args.scored)
     explain = Path(args.explain) if args.explain else None
