@@ -1,7 +1,6 @@
-# Visualization extras for AstroGraphAnomaly (A→H suite)
-plotly>=5.20.0
-kaleido>=0.2.1
-pyvis>=0.3.2
-umap-learn>=0.5.5
-imageio>=2.31
-Pillow>=10.0
+numpy
+pandas
+scikit-learn
+matplotlib
+jinja2
+requests
