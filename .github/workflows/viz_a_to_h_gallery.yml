@@ -1,0 +1,52 @@
+name: viz_a_to_h_gallery
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    # Weekly (UTC) — avoid heavy artefacts on every push.
+    - cron: "23 2 * * 1"
+
+concurrency:
+  group: viz-a-to-h-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gallery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    env:
+      MPLBACKEND: Agg
+      PYTHONHASHSEED: "0"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install deps (runtime + viz)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements_viz.txt
+
+      - name: Run pipeline (offline sample) + plots
+        run: |
+          mkdir -p results/viz_a_to_h_run
+          python tools/run_full.py csv             --in-csv data/sample_gaia_like.csv             --out results/viz_a_to_h_run             --top-k 30             --knn-k 8             --engine isolation_forest             --features-mode extended             --explain-top 10
+
+      - name: Build A→H gallery
+        run: |
+          python tools/viz_a_to_h_suite.py             --run-dir results/viz_a_to_h_run             --scored results/viz_a_to_h_run/scored.csv             --graph results/viz_a_to_h_run/graph_full.graphml             --explain results/viz_a_to_h_run/explanations.jsonl
+
+      - name: Upload artefacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: viz_a_to_h_run
+          path: results/viz_a_to_h_run
+          if-no-files-found: error

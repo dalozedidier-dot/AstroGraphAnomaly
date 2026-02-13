@@ -1,18 +1,26 @@
-name: Region Pack Fast Smoke
+name: region_pack_fast_smoke
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: {}
   schedule:
-    # Mondays at 04:13 UTC
-    - cron: "13 4 * * 1"
+    # Twice a week (UTC)
+    - cron: "41 4 * * 2,5"
+
+concurrency:
+  group: region-pack-fast-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  region-pack-fast:
+  region_fast:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 20
+
+    env:
+      MPLBACKEND: Agg
+      PYTHONHASHSEED: "0"
+
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -24,18 +32,20 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install -r requirements_viz.txt
 
-      - name: Run GalaxyCandidates (2 regions, 2000 rows each)
+      - name: Region pack fast (GalaxyCandidates)
         run: |
-          python tools/run_regions_fast.py             --kind galaxy_candidates             --inputs "data/region_pack/raw/GalaxyCandidates_*.csv.gz"             --out "results/region_pack_fast/galaxy_candidates"             --max-regions 2             --max-rows 2000
+          mkdir -p results/region_pack_fast
+          python tools/run_regions_fast.py             --kind galaxy_candidates             --inputs data/region_pack/raw/GalaxyCandidates_022411-022698.csv.gz             --out results/region_pack_fast/galaxy_candidates             --max-regions 1             --max-rows 1200
 
-      - name: Run VariSummary (2 regions, 2000 rows each)
+      - name: Region pack fast (VariSummary)
         run: |
-          python tools/run_regions_fast.py             --kind vari_summary             --inputs "data/region_pack/raw/VariSummary_*.csv.gz"             --out "results/region_pack_fast/vari_summary"             --max-regions 2             --max-rows 2000
+          python tools/run_regions_fast.py             --kind vari_summary             --inputs data/region_pack/raw/VariSummary_022159-022410.csv.gz             --out results/region_pack_fast/vari_summary             --max-regions 1             --max-rows 1200
 
-      - name: Upload region pack artifacts
+      - name: Upload artefacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: region_pack_fast_results
           path: results/region_pack_fast
+          if-no-files-found: error

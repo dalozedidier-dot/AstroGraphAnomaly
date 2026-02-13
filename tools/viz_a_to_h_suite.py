@@ -72,6 +72,27 @@ except Exception:
     _HAS_IMAGEIO = False
 
 
+
+def _require_viz_deps(allow_missing: bool) -> None:
+    """Fail fast if interactive deps are missing, unless allow_missing is set.
+
+    This avoids the confusing situation where the suite 'succeeds' but produces tiny placeholder HTML.
+    """
+    missing = []
+    if not _HAS_PLOTLY:
+        missing.append("plotly")
+    if not _HAS_PYVIS:
+        missing.append("pyvis")
+    if not _HAS_IMAGEIO:
+        missing.append("imageio")
+    if missing and not allow_missing:
+        raise SystemExit(
+            "Missing visualization dependencies: "
+            + ", ".join(missing)
+            + ". Install them with: pip install -r requirements_viz.txt"
+        )
+
+
 def robust_unit_interval(x: np.ndarray) -> np.ndarray:
     x = np.asarray(x, dtype=float)
     x = np.where(np.isfinite(x), x, np.nan)
@@ -711,162 +732,9 @@ def plot_feature_interaction_heatmap(df: pd.DataFrame, out_png: Path) -> None:
         plt.close(fig)
         return
 
-    X = df[cols].apply(pd.to_numeric, errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0)
-    C = X.corr(method="spearman").to_numpy(float)
-
-    fig = plt.figure(figsize=(10, 8))
-    ax = plt.gca()
-    im = ax.imshow(C, aspect="auto")
-    ax.set_title("Feature interaction heatmap (Spearman)")
-    ax.set_xticks(range(len(cols)))
-    ax.set_xticklabels(cols, rotation=45, ha="right")
-    ax.set_yticks(range(len(cols)))
-    ax.set_yticklabels(cols)
-    plt.colorbar(im, ax=ax, shrink=0.8)
-    fig.savefig(out_png, dpi=320, bbox_inches="tight")
-    plt.close(fig)
-
-
-def export_proper_motion_trails(df: pd.DataFrame, out_gif: Path, top_k: int = 30, frames: int = 24) -> None:
-    if not _HAS_IMAGEIO:
-        out_gif.write_text("imageio not installed. Install requirements_viz.txt.", encoding="utf-8")
-        return
-    needed = {"ra","dec","pmra","pmdec"}
-    if not needed.issubset(set(df.columns)):
-        out_gif.write_text("Missing ra/dec/pmra/pmdec for trails.", encoding="utf-8")
-        return
-
-    d = df.sort_values("anomaly_score_hi", ascending=False).head(min(top_k, len(df))).copy()
-    ra0 = pd.to_numeric(d["ra"], errors="coerce").fillna(0.0).to_numpy(float)
-    dec0 = pd.to_numeric(d["dec"], errors="coerce").fillna(0.0).to_numpy(float)
-    pmra = pd.to_numeric(d["pmra"], errors="coerce").fillna(0.0).to_numpy(float)
-    pmdec = pd.to_numeric(d["pmdec"], errors="coerce").fillna(0.0).to_numpy(float)
-    score = d["anomaly_score_norm"].to_numpy(float)
-
-    mas2deg = 1.0 / 3.6e6
-    cosd = np.cos(np.deg2rad(np.clip(dec0, -89.9, 89.9)))
-    dra_deg_per_yr = (pmra * mas2deg) / np.maximum(cosd, 1e-3)
-    ddec_deg_per_yr = pmdec * mas2deg
-
-    T = 8.0
-    ts = np.linspace(0.0, T, frames)
-
-    imgs = []
-    for t in ts:
-        fig = plt.figure(figsize=(10, 6))
-        ax = plt.gca()
-        ax.scatter(ra0, dec0, s=20, alpha=0.18)
-        steps = 20
-        tt = np.linspace(max(0.0, t-2.0), t, steps)
-        for i in range(len(ra0)):
-            ra_tr = ra0[i] + dra_deg_per_yr[i]*tt
-            dec_tr = dec0[i] + ddec_deg_per_yr[i]*tt
-            ax.plot(ra_tr, dec_tr, alpha=0.35 + 0.4*score[i], linewidth=1.0 + 1.2*score[i])
-
-        ra_t = ra0 + dra_deg_per_yr*t
-        dec_t = dec0 + ddec_deg_per_yr*t
-        ax.scatter(ra_t, dec_t, s=40 + 140*score, alpha=0.85)
-
-        ax.set_title("Proper motion trails (Top anomalies)")
-        ax.set_xlabel("RA [deg]")
-        ax.set_ylabel("Dec [deg]")
-        ax.grid(alpha=0.15)
-        fig.canvas.draw()
-        # Matplotlib >=3.10 removed tostring_rgb on FigureCanvasAgg. Use buffer_rgba / tostring_argb fallback.
-        w, h = fig.canvas.get_width_height()
-        img = None
-        try:
-            buf = np.asarray(fig.canvas.buffer_rgba())  # (h, w, 4)
-            if buf.ndim == 3 and buf.shape[2] >= 3:
-                img = np.asarray(buf[..., :3]).copy()
-        except Exception:
-            img = None
-        if img is None:
-            try:
-                argb = np.frombuffer(fig.canvas.tostring_argb(), dtype=np.uint8).reshape((h, w, 4))
-                img = np.asarray(argb[..., 1:4]).copy()
-            except Exception:
-                img = np.zeros((h, w, 3), dtype=np.uint8)
-        imgs.append(img)
-        plt.close(fig)
-
-    imageio.mimsave(out_gif, imgs, duration=0.11)
-
-
-def export_feature_biocubes(df: pd.DataFrame, out_html: Path) -> None:
-    if not _HAS_PLOTLY:
-        out_html.write_text("Plotly not installed. Install requirements_viz.txt.", encoding="utf-8")
-        return
-
-    y = df["anomaly_label"].to_numpy(int) if "anomaly_label" in df.columns else np.ones(len(df), dtype=int)
-    an = df[y == -1]
-    no = df[y != -1]
-
-    candidates = [c for c in ["phot_g_mean_mag","bp_rp","parallax","pmra","pmdec","distance","ruwe","degree","kcore","betweenness"]
-                  if c in df.columns and pd.api.types.is_numeric_dtype(df[c])]
-    feats = candidates[:8] if len(candidates) >= 5 else [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])][:6]
-    if len(feats) == 0:
-        out_html.write_text("No numeric features found.", encoding="utf-8")
-        return
-
-    def stats(d: pd.DataFrame, col: str):
-        x = pd.to_numeric(d[col], errors="coerce").replace([np.inf, -np.inf], np.nan).dropna().to_numpy(float)
-        if x.size == 0:
-            return 0.0, 0.0, 0.0
-        q1, med, q3 = np.percentile(x, [25, 50, 75])
-        return float(q1), float(med), float(q3)
-
-    meshes = []
-    for i, f in enumerate(feats):
-        for gi, (name, dset) in enumerate([("Normal", no), ("Anomalous", an)]):
-            q1, med, q3 = stats(dset, f)
-            x0, x1 = i - 0.35, i + 0.35
-            y0, y1 = gi - 0.35, gi + 0.35
-            z0, z1 = q1, q3
-
-            vx = [x0,x1,x1,x0,x0,x1,x1,x0]
-            vy = [y0,y0,y1,y1,y0,y0,y1,y1]
-            vz = [z0,z0,z0,z0,z1,z1,z1,z1]
-
-            I = [0,0,0, 4,4,4, 0,0, 1,1, 2,2]
-            J = [1,2,3, 5,6,7, 4,5, 2,6, 3,7]
-            K = [2,3,1, 6,7,5, 5,6, 6,5, 7,6]
-
-            meshes.append(go.Mesh3d(x=vx,y=vy,z=vz, i=I,j=J,k=K, opacity=0.25))
-            meshes.append(go.Scatter3d(x=[i], y=[gi], z=[med], mode="markers", marker=dict(size=5), name=f"{f} {name}"))
-
-    fig = go.Figure(data=meshes)
-    fig.update_layout(
-        title="Feature BioCubes (IQR boxes + median markers)",
-        scene=dict(
-            xaxis=dict(title="feature index", tickmode="array", tickvals=list(range(len(feats))), ticktext=feats),
-            yaxis=dict(title="group", tickmode="array", tickvals=[0,1], ticktext=["Normal","Anomalous"]),
-            zaxis=dict(title="value"),
-        ),
-        margin=dict(l=0, r=0, b=0, t=40),
-        showlegend=False
-    )
-    plotly_plot(fig, filename=str(out_html), auto_open=False, include_plotlyjs=True)
-
-
-
-def export_umap(df: pd.DataFrame, out_png: Path, out_html: Path) -> None:
-    """
-    H) UMAP cosmic cloud.
-    - PNG: quick static view.
-    - HTML: interactive Plotly (offline-first).
-    Multi-color uses viz_color if present.
-    """
-    ignore = {"source_id"}
-    num_cols = [c for c in df.columns if c not in ignore and pd.api.types.is_numeric_dtype(df[c])]
-    preferred = [c for c in ["phot_g_mean_mag","bp_rp","parallax","pmra","pmdec","distance","ruwe","degree","kcore","betweenness"] if c in num_cols]
-    cols = preferred if len(preferred) >= 5 else num_cols[:8]
-    if len(cols) < 2:
-        _placeholder_png(out_png, "UMAP cosmic cloud", "Not enough numeric columns for UMAP/PCA embedding.")
-        _placeholder_html(out_html, "UMAP cosmic cloud", "Not enough numeric columns for UMAP/PCA embedding.")
-        return
-
-    X = df[cols].apply(pd.to_numeric, errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0).to_numpy(float)
+    X = df[cols].apply(pd.to_numeric, errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0).to_numpy()
+    # Some pandas backends can return a read-only view; force a writable copy.
+    X = np.array(X, dtype=float, copy=True)
     for j in range(X.shape[1]):
         X[:, j] = robust_z(X[:, j])
 
@@ -934,13 +802,25 @@ def plot_hr_cmd_outliers(df: pd.DataFrame, out_png: Path, out_html: Path) -> Non
       - x: bp_rp (color)
       - y: absolute G magnitude (requires parallax + phot_g_mean_mag)
     """
-    need = {"bp_rp", "phot_g_mean_mag", "parallax"}
-    if not need.issubset(set(df.columns)):
-        _placeholder_png(out_png, "HR/CMD outliers", "Missing required columns (bp_rp, phot_g_mean_mag, parallax).")
-        _placeholder_html(out_html, "HR/CMD outliers", "Missing required columns (bp_rp, phot_g_mean_mag, parallax).")
+    # Accept either:
+    # - precomputed bp_rp
+    # - or (phot_bp_mean_mag - phot_rp_mean_mag)
+    if "bp_rp" in df.columns:
+        bp_rp = pd.to_numeric(df["bp_rp"], errors="coerce").to_numpy(float)
+    elif {"phot_bp_mean_mag", "phot_rp_mean_mag"}.issubset(set(df.columns)):
+        bp = pd.to_numeric(df["phot_bp_mean_mag"], errors="coerce").to_numpy(float)
+        rp = pd.to_numeric(df["phot_rp_mean_mag"], errors="coerce").to_numpy(float)
+        bp_rp = bp - rp
+    else:
+        _placeholder_png(out_png, "HR/CMD outliers", "Missing required color columns (bp_rp or phot_bp_mean_mag+phot_rp_mean_mag).")
+        _placeholder_html(out_html, "HR/CMD outliers", "Missing required color columns (bp_rp or phot_bp_mean_mag+phot_rp_mean_mag).")
         return
 
-    bp_rp = pd.to_numeric(df["bp_rp"], errors="coerce").to_numpy(float)
+    if not {"phot_g_mean_mag", "parallax"}.issubset(set(df.columns)):
+        _placeholder_png(out_png, "HR/CMD outliers", "Missing required columns (phot_g_mean_mag, parallax).")
+        _placeholder_html(out_html, "HR/CMD outliers", "Missing required columns (phot_g_mean_mag, parallax).")
+        return
+
     gmag = pd.to_numeric(df["phot_g_mean_mag"], errors="coerce").to_numpy(float)
     plx = pd.to_numeric(df["parallax"], errors="coerce").to_numpy(float)
 
@@ -1050,6 +930,7 @@ def parse_args():
     ap.add_argument("--scored", required=True, help="Path to scored.csv")
     ap.add_argument("--graph", default="", help="Path to graph graphml (optional). If empty, auto-detect in run-dir.")
     ap.add_argument("--explain", default="", help="Path to explanations.jsonl (optional)")
+    ap.add_argument("--allow-missing-viz-deps", action="store_true", help="If set, generate placeholders instead of failing when Plotly/PyVis/ImageIO are missing.")
 
     # Multi-color incoherence settings
     ap.add_argument(
