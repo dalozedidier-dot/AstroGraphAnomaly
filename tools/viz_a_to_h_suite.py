@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import html
 import math
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -340,6 +341,124 @@ def _write_plotly_html(fig, out_html: Path, title: str) -> None:
         full_html=True,
         auto_open=False,
     )
+
+
+def _smart_rel_from_outputs(p: str) -> str:
+    """Best-effort: convert absolute/results paths to links relative to viz_a_to_h."""
+    s = str(p)
+    marker = "/viz_a_to_h/"
+    if marker in s:
+        return s.split(marker, 1)[1]
+    marker2 = "viz_a_to_h/"
+    if marker2 in s:
+        return s.split(marker2, 1)[1]
+    # fallback: keep tail name
+    try:
+        return Path(s).name
+    except Exception:
+        return s
+
+
+def _viz_profile_html(profile: dict) -> str:
+    """Render viz_profile.json as a readable HTML report."""
+    esc = html.escape
+
+    keys = [k for k in profile.keys() if k != "steps"]
+    keys.sort()
+    steps = profile.get("steps", {}) or {}
+
+    # Build summary rows
+    rows = []
+    for k in keys:
+        v = profile.get(k)
+        if isinstance(v, (dict, list)):
+            v_txt = esc(json.dumps(v, ensure_ascii=False))
+        else:
+            v_txt = esc(str(v))
+        rows.append(f"<tr><td class='k'>{esc(str(k))}</td><td class='v'>{v_txt}</td></tr>")
+
+    # Steps
+    step_blocks = []
+    for step_name, info in steps.items():
+        ok = bool(info.get("ok"))
+        err = info.get("error")
+        outputs = info.get("outputs") or []
+        badge = "OK" if ok else "FAIL"
+        badge_cls = "ok" if ok else "fail"
+        out_links = ""
+        if outputs:
+            items = []
+            for o in outputs:
+                rel = _smart_rel_from_outputs(str(o))
+                items.append(f"<li><a href='{esc(rel)}'>{esc(rel)}</a></li>")
+            out_links = "<ul class='outs'>" + "".join(items) + "</ul>"
+        err_html = ""
+        if err:
+            err_html = f"<div class='err'>{esc(str(err))}</div>"
+        step_blocks.append(
+            f"""<details class='step' open>
+  <summary><span class='badge {badge_cls}'>{badge}</span> {esc(str(step_name))}</summary>
+  {err_html}
+  {out_links}
+</details>"""
+        )
+
+    # Raw JSON (collapsible)
+    raw = esc(json.dumps(profile, indent=2, sort_keys=True, ensure_ascii=False))
+
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Viz Profile</title>
+  <style>
+    body {{ margin: 0; font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Arial, sans-serif; background: #0b0d12; color: #eaeef7; }}
+    .wrap {{ max-width: 1100px; margin: 0 auto; padding: 28px 18px 60px; }}
+    h1 {{ font-size: 22px; margin: 0 0 14px; }}
+    .hint {{ color: #a8b0c2; font-size: 13px; margin-bottom: 18px; }}
+    .card {{ background: #101522; border: 1px solid #1d2740; border-radius: 14px; padding: 16px; margin: 14px 0; }}
+    table {{ width: 100%; border-collapse: collapse; }}
+    td {{ padding: 8px 10px; border-bottom: 1px solid #1d2740; vertical-align: top; }}
+    td.k {{ width: 260px; color: #c9d3ea; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; }}
+    td.v {{ color: #eaeef7; word-break: break-word; }}
+    .step {{ background: #0f1422; border: 1px solid #1d2740; border-radius: 12px; padding: 10px 12px; margin: 10px 0; }}
+    summary {{ cursor: pointer; }}
+    .badge {{ display: inline-block; min-width: 44px; text-align: center; font-size: 11px; padding: 3px 8px; border-radius: 999px; margin-right: 10px; }}
+    .ok {{ background: rgba(46, 204, 113, 0.18); border: 1px solid rgba(46, 204, 113, 0.45); }}
+    .fail {{ background: rgba(231, 76, 60, 0.18); border: 1px solid rgba(231, 76, 60, 0.45); }}
+    .err {{ margin-top: 10px; color: #ffd0cf; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; white-space: pre-wrap; }}
+    .outs {{ margin: 10px 0 0 18px; }}
+    a {{ color: #9dc1ff; text-decoration: none; }}
+    a:hover {{ text-decoration: underline; }}
+    pre {{ background: #0f1422; border: 1px solid #1d2740; border-radius: 12px; padding: 12px; overflow: auto; }}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Visualization profile</h1>
+    <div class="hint">Run capabilities, fallbacks used, and outputs produced by each step.</div>
+
+    <div class="card">
+      <h2 style="font-size:16px;margin:0 0 10px;">Summary</h2>
+      <table>
+        {''.join(rows)}
+      </table>
+    </div>
+
+    <div class="card">
+      <h2 style="font-size:16px;margin:0 0 10px;">Steps</h2>
+      {''.join(step_blocks)}
+    </div>
+
+    <div class="card">
+      <h2 style="font-size:16px;margin:0 0 10px;">Raw JSON</h2>
+      <pre>{raw}</pre>
+    </div>
+  </div>
+</body>
+</html>"""
+
 
 def _placeholder_gif(path: Path, title: str, msg: str) -> None:
     if not _HAS_IMAGEIO:
@@ -1163,6 +1282,10 @@ def export_diagnostics(df: pd.DataFrame, out_dir: Path, profile: Dict[str, objec
     (diag / "viz_profile.json").write_text(json.dumps(profile, indent=2, sort_keys=True), encoding="utf-8")
     # Also write a copy at the viz root for convenience (some dashboards/linkers expect it).
     (out_dir / "viz_profile.json").write_text(json.dumps(profile, indent=2, sort_keys=True), encoding="utf-8")
+    # Human-friendly HTML view of the profile (keeps links relative to viz_a_to_h).
+    profile_html = _viz_profile_html(profile)
+    (diag / "viz_profile.html").write_text(profile_html, encoding="utf-8")
+    (out_dir / "viz_profile.html").write_text(profile_html, encoding="utf-8")
 
     score_col = "anomaly_score_norm" if "anomaly_score_norm" in df.columns else ("anomaly_score" if "anomaly_score" in df.columns else None)
     if score_col is None:
@@ -1339,7 +1462,7 @@ def export_dashboard(out_dir: Path) -> None:
   <a href="{rel(out_dir/'10_umap_cosmic_cloud.html')}">H) UMAP (interactive)</a>
   <a href="{rel(out_dir/'12_hr_cmd_outliers.html')}">I) HR/CMD (interactive)</a>
   <a href="{rel(out_dir/'14_graph_layout_cloud.html')}">J) Graph layout (interactive)</a>
-  <a href="{rel(out_dir/'diagnostics/viz_profile.json')}">Diagnostics profile</a>
+  <a href="{rel(out_dir/'viz_profile.html')}">Diagnostics profile</a>
 </div>
 
 <h2>Curated visuals</h2>
