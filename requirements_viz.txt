@@ -1,14 +1,20 @@
-# Visualization extras for the A→H suite (Plotly/PyVis/UMAP/GIFs)
+# Visualization extras for AstroGraphAnomaly (A→H viz suite)
+# Installed in CI if requirements_viz.txt exists at repo root.
+
 numpy
 pandas
 scikit-learn
 matplotlib
+scipy
+networkx
 jinja2
 requests
-scipy
-plotly
-pyvis
-umap-learn
-imageio
-kaleido
 pillow
+imageio>=2.20
+
+# Interactive HTML
+plotly>=5.22.0
+pyvis>=0.3.2
+
+# UMAP (H)
+umap-learn>=0.5.5
