@@ -1370,6 +1370,8 @@ def export_dashboard(out_dir: Path) -> None:
 </html>
 """
     (out_dir / "06_explorer_dashboard.html").write_text(html, encoding="utf-8")
+    # Convenience: write the dashboard as the folder index too.
+    (out_dir / "index.html").write_text(html, encoding="utf-8")
 
 
 def parse_args():
