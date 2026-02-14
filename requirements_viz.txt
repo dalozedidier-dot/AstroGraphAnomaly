@@ -1,14 +1,14 @@
+# Visualization extras for the A→H suite (Plotly/PyVis/UMAP/GIFs)
 numpy
 pandas
 scikit-learn
 matplotlib
 jinja2
 requests
-
-# Viz extras (A→H suite)
-plotly>=5.20
-kaleido>=0.2.1
-pyvis>=0.3.2
-scipy>=1.10
-umap-learn>=0.5.5
-imageio>=2.34
+scipy
+plotly
+pyvis
+umap-learn
+imageio
+kaleido
+pillow
