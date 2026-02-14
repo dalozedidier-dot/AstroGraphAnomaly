@@ -1161,6 +1161,8 @@ def export_diagnostics(df: pd.DataFrame, out_dir: Path, profile: Dict[str, objec
     diag.mkdir(parents=True, exist_ok=True)
 
     (diag / "viz_profile.json").write_text(json.dumps(profile, indent=2, sort_keys=True), encoding="utf-8")
+    # Also write a copy at the viz root for convenience (some dashboards/linkers expect it).
+    (out_dir / "viz_profile.json").write_text(json.dumps(profile, indent=2, sort_keys=True), encoding="utf-8")
 
     score_col = "anomaly_score_norm" if "anomaly_score_norm" in df.columns else ("anomaly_score" if "anomaly_score" in df.columns else None)
     if score_col is None:
@@ -1307,7 +1309,12 @@ def export_graph_layout_cloud(df: pd.DataFrame, G: Optional[object], out_png: Pa
         _placeholder_html(out_html, "Graph layout cloud", f"Plotly export failed: {e}")
 
 def export_dashboard(out_dir: Path) -> None:
-    rel = lambda p: p.name
+    def rel(p: Path) -> str:
+        """Return a stable relative path for links inside the viz_a_to_h folder."""
+        try:
+            return p.relative_to(out_dir).as_posix()
+        except Exception:
+            return p.as_posix()
     html = f"""<!doctype html>
 <html>
 <head>
