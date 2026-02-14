@@ -356,14 +356,18 @@ def _placeholder_gif(path: Path, title: str, msg: str) -> None:
         pass
 
 
-def _safe_call(name: str, outputs: List[Tuple[Path, str]], fn) -> None:
+def _safe_call(name: str, outputs: List[Tuple[Path, str]], fn, profile: Optional[dict] = None) -> None:
     """
     outputs: list of (path, kind) where kind in {"png","html","gif"}.
     """
     try:
         fn()
+        if profile is not None:
+            profile.setdefault('steps', {})[name] = {'ok': True, 'error': None, 'outputs': [str(p) for p, _ in outputs]}
     except Exception as e:
         msg = f"{type(e).__name__}: {e}"
+        if profile is not None:
+            profile.setdefault('steps', {})[name] = {'ok': False, 'error': msg, 'outputs': [str(p) for p, _ in outputs]}
         for p, kind in outputs:
             try:
                 if kind == "png":
@@ -1092,6 +1096,216 @@ def plot_hr_cmd_outliers(df: pd.DataFrame, out_png: Path, out_html: Path) -> Non
     except Exception as e:
         _placeholder_html(out_html, "HR/CMD outliers", f"Plotly export failed: {e}")
 
+def compute_viz_profile(df: pd.DataFrame, G: Optional[object], graph_path: Optional[Path], args: argparse.Namespace) -> Dict[str, object]:
+    """Capture what data is available and which visualization backends are active.
+
+    Purpose: keep the suite utility-first. The same detector output should be visualized
+    with the most meaningful representation given the available physical/astronomical variables.
+    """
+    cols = set(df.columns)
+    has_bp_rp = ("bp_rp" in cols) or ({"phot_bp_mean_mag", "phot_rp_mean_mag"}.issubset(cols))
+    has_pm = {"pmra", "pmdec"}.issubset(cols)
+    has_parallax = "parallax" in cols
+    has_ruwe = "ruwe" in cols
+
+    if "bp_rp" in cols:
+        hrcmd_x = "bp_rp"
+    elif {"phot_bp_mean_mag", "phot_rp_mean_mag"}.issubset(cols):
+        hrcmd_x = "bp_rp_derived"
+    elif has_ruwe:
+        hrcmd_x = "ruwe_proxy"
+    elif has_parallax:
+        hrcmd_x = "parallax_proxy"
+    else:
+        hrcmd_x = "missing"
+
+    if {"phot_g_mean_mag", "parallax"}.issubset(cols):
+        hrcmd_y = "abs_mag_g"
+    elif "phot_g_mean_mag" in cols:
+        hrcmd_y = "g_mag_proxy"
+    elif "mean_mag_g_fov" in cols:
+        hrcmd_y = "mean_mag_g_fov_proxy"
+    else:
+        hrcmd_y = "missing"
+
+    profile: Dict[str, object] = {
+        "run_dir": str(Path(args.run_dir)),
+        "scored": str(Path(args.scored)),
+        "graph": str(graph_path) if graph_path is not None else None,
+        "n_rows": int(len(df)),
+        "has_plotly": bool(_HAS_PLOTLY),
+        "has_pyvis": bool(_HAS_PYVIS),
+        "has_umap": bool(_HAS_UMAP),
+        "umap_backend": "umap" if (_HAS_UMAP and umap is not None) else "svd",
+        "has_bp_rp": bool(has_bp_rp),
+        "has_pm": bool(has_pm),
+        "has_parallax": bool(has_parallax),
+        "has_ruwe": bool(has_ruwe),
+        "hrcmd_x": hrcmd_x,
+        "hrcmd_y": hrcmd_y,
+        "graph_nodes": int(G.number_of_nodes()) if hasattr(G, "number_of_nodes") else 0,
+        "graph_edges": int(G.number_of_edges()) if hasattr(G, "number_of_edges") else 0,
+        "color_mode": str(getattr(args, "color_mode", "auto")),
+        "phi_prefix": str(getattr(args, "phi_prefix", "phi_")),
+    }
+    return profile
+
+
+def export_diagnostics(df: pd.DataFrame, out_dir: Path, profile: Dict[str, object]) -> None:
+    """Utility-first diagnostics: correlations + top outliers + targeted plots.
+
+    Goal: make sure the detection signal (score) is traceable back to measurable variables,
+    not just a black-box scalar.
+    """
+    diag = out_dir / "diagnostics"
+    diag.mkdir(parents=True, exist_ok=True)
+
+    (diag / "viz_profile.json").write_text(json.dumps(profile, indent=2, sort_keys=True), encoding="utf-8")
+
+    score_col = "anomaly_score_norm" if "anomaly_score_norm" in df.columns else ("anomaly_score" if "anomaly_score" in df.columns else None)
+    if score_col is None:
+        (diag / "note.txt").write_text("No anomaly_score column found; diagnostics limited.", encoding="utf-8")
+        for k in (1, 2, 3):
+            _placeholder_png(diag / f"scatter_score_vs_feature_{k}.png", "Diagnostics", "No anomaly_score column.")
+        return
+
+    s = pd.to_numeric(df[score_col], errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0)
+
+    num_cols = [c for c in df.columns if c not in {score_col, "viz_color_value"} and pd.api.types.is_numeric_dtype(df[c])]
+    rows: List[Tuple[str, float, float, int]] = []
+    for c in num_cols:
+        x = pd.to_numeric(df[c], errors="coerce").replace([np.inf, -np.inf], np.nan)
+        m = x.notna() & s.notna()
+        if int(m.sum()) < 30:
+            continue
+        try:
+            r = float(pd.Series(x[m]).corr(pd.Series(s[m]), method="spearman"))
+        except Exception:
+            continue
+        if not np.isfinite(r):
+            continue
+        rows.append((c, r, float(abs(r)), int(m.sum())))
+    rows.sort(key=lambda t: t[2], reverse=True)
+    corr_df = pd.DataFrame(rows, columns=["feature", "spearman_r", "abs_r", "n"])
+    corr_df.to_csv(diag / "score_feature_correlations.csv", index=False)
+
+    keep_cols = [c for c in ["source_id", score_col, "ra", "dec", "phot_g_mean_mag", "bp_rp", "parallax", "pmra", "pmdec", "ruwe"] if c in df.columns]
+    if not keep_cols:
+        keep_cols = [score_col]
+    top = df.copy()
+    top[score_col] = s
+    top = top.sort_values(score_col, ascending=False).head(200)
+    top[keep_cols].to_csv(diag / "top_outliers.csv", index=False)
+
+    top_feats = corr_df.head(3)["feature"].tolist() if not corr_df.empty else []
+    for k, feat in enumerate(top_feats, start=1):
+        out_png = diag / f"scatter_score_vs_{feat}.png"
+        out_png_generic = diag / f"scatter_score_vs_feature_{k}.png"
+        x = pd.to_numeric(df[feat], errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0).to_numpy(float)
+        y = s.to_numpy(float)
+        fig = plt.figure(figsize=(9.5, 6.5), dpi=170)
+        ax = plt.gca()
+        ax.set_facecolor("#07080c")
+        fig.patch.set_facecolor("#07080c")
+        ax.scatter(x, y, s=10, alpha=0.55)
+        ax.set_title(f"Score vs {feat}", color="white")
+        ax.set_xlabel(feat, color="white")
+        ax.set_ylabel(score_col, color="white")
+        ax.tick_params(colors="white")
+        for spine in ax.spines.values():
+            spine.set_color("#333")
+        fig.savefig(out_png, dpi=220, bbox_inches="tight")
+        try:
+            fig.savefig(out_png_generic, dpi=220, bbox_inches="tight")
+        except Exception:
+            pass
+        plt.close(fig)
+
+    for k in (1, 2, 3):
+        p = diag / f"scatter_score_vs_feature_{k}.png"
+        if not p.exists():
+            _placeholder_png(p, "Diagnostics", "Not enough correlated features.")
+
+
+def export_graph_layout_cloud(df: pd.DataFrame, G: Optional[object], out_png: Path, out_html: Path) -> None:
+    """Topology-first embedding using a spring layout on the graph (if available)."""
+    if G is None or not hasattr(G, "number_of_nodes") or int(G.number_of_nodes()) == 0:
+        _placeholder_png(out_png, "Graph layout cloud", "Graph not available.")
+        _placeholder_html(out_html, "Graph layout cloud", "Graph not available.")
+        return
+
+    try:
+        import networkx as nx  # type: ignore
+    except Exception:
+        _placeholder_png(out_png, "Graph layout cloud", "networkx not installed.")
+        _placeholder_html(out_html, "Graph layout cloud", "networkx not installed.")
+        return
+
+    nodes = list(G.nodes())
+    if len(nodes) > 4000:
+        rng = np.random.default_rng(42)
+        nodes = rng.choice(nodes, size=4000, replace=False).tolist()
+        H = G.subgraph(nodes).copy()
+    else:
+        H = G
+
+    try:
+        pos = nx.spring_layout(H, seed=42, iterations=60)
+    except Exception as e:
+        _placeholder_png(out_png, "Graph layout cloud", f"Layout failed: {e}")
+        _placeholder_html(out_html, "Graph layout cloud", f"Layout failed: {e}")
+        return
+
+    score_col = "anomaly_score_norm" if "anomaly_score_norm" in df.columns else ("anomaly_score" if "anomaly_score" in df.columns else None)
+    if score_col is None or "source_id" not in df.columns:
+        _placeholder_png(out_png, "Graph layout cloud", "Missing score or source_id.")
+        _placeholder_html(out_html, "Graph layout cloud", "Missing score or source_id.")
+        return
+
+    score = pd.to_numeric(df[score_col], errors="coerce").fillna(0.0)
+    score_map = dict(zip(df["source_id"].astype(str), score.astype(float)))
+
+    xs: List[float] = []
+    ys: List[float] = []
+    cs: List[float] = []
+    for node, (x, y) in pos.items():
+        key = str(node)
+        xs.append(float(x))
+        ys.append(float(y))
+        cs.append(float(score_map.get(key, 0.0)))
+
+    xs_arr = np.array(xs, dtype=float)
+    ys_arr = np.array(ys, dtype=float)
+    cs_arr = np.array(cs, dtype=float)
+
+    out_png.parent.mkdir(parents=True, exist_ok=True)
+    fig = plt.figure(figsize=(10, 8), dpi=170)
+    ax = plt.gca()
+    ax.set_facecolor("#07080c")
+    fig.patch.set_facecolor("#07080c")
+    ax.scatter(xs_arr, ys_arr, s=9, alpha=0.55)
+    idx = np.argsort(cs_arr)[::-1]
+    top = idx[: min(160, max(30, int(0.08 * len(cs_arr))))]
+    ax.scatter(xs_arr[top], ys_arr[top], s=24, alpha=0.95)
+    ax.set_title("Graph layout cloud (spring)", color="white")
+    ax.set_xticks([])
+    ax.set_yticks([])
+    fig.savefig(out_png, dpi=220, bbox_inches="tight")
+    plt.close(fig)
+
+    if not _HAS_PLOTLY:
+        _placeholder_html(out_html, "Graph layout cloud", "Plotly not installed. Install requirements_viz.txt.")
+        return
+
+    try:
+        fig3 = go.Figure()
+        fig3.add_trace(go.Scattergl(x=xs_arr, y=ys_arr, mode="markers", marker=dict(size=5, opacity=0.55), name="nodes"))
+        fig3.add_trace(go.Scattergl(x=xs_arr[top], y=ys_arr[top], mode="markers", marker=dict(size=8, opacity=0.95), name="top anomalies"))
+        fig3.update_layout(title="Graph layout cloud (spring)", template="plotly_dark")
+        _write_plotly_html(fig3, out_html, "Graph layout cloud")
+    except Exception as e:
+        _placeholder_html(out_html, "Graph layout cloud", f"Plotly export failed: {e}")
+
 def export_dashboard(out_dir: Path) -> None:
     rel = lambda p: p.name
     html = f"""<!doctype html>
@@ -1117,6 +1331,8 @@ def export_dashboard(out_dir: Path) -> None:
   <a href="{rel(out_dir/'08_feature_biocubes.html')}">G) BioCubes</a>
   <a href="{rel(out_dir/'10_umap_cosmic_cloud.html')}">H) UMAP (interactive)</a>
   <a href="{rel(out_dir/'12_hr_cmd_outliers.html')}">I) HR/CMD (interactive)</a>
+  <a href="{rel(out_dir/'14_graph_layout_cloud.html')}">J) Graph layout (interactive)</a>
+  <a href="{rel(out_dir/'diagnostics/viz_profile.json')}">Diagnostics profile</a>
 </div>
 
 <h2>Curated visuals</h2>
@@ -1127,6 +1343,20 @@ def export_dashboard(out_dir: Path) -> None:
   <div class="card"><h3>D) Feature Interaction</h3><img src="{rel(out_dir/'05_feature_interaction_heatmap.png')}" /></div>
   <div class="card"><h3>F) Proper Motion Trails</h3><img src="{rel(out_dir/'07_proper_motion_trails.gif')}" /></div>
   <div class="card"><h3>I) HR/CMD outliers</h3><img src="{rel(out_dir/'11_hr_cmd_outliers.png')}" /></div>
+  <div class="card"><h3>J) Graph layout cloud</h3><img src="{rel(out_dir/'13_graph_layout_cloud.png')}" /></div>
+</div>
+
+
+<h2>Diagnostics</h2>
+<div class="card">
+  <p>Profile: <a href="diagnostics/viz_profile.json">viz_profile.json</a></p>
+  <p>Correlations: <a href="diagnostics/score_feature_correlations.csv">score_feature_correlations.csv</a></p>
+  <p>Top outliers: <a href="diagnostics/top_outliers.csv">top_outliers.csv</a></p>
+  <div class="grid">
+    <div class="card"><h3>Score vs feature (1)</h3><img src="diagnostics/scatter_score_vs_feature_1.png" /></div>
+    <div class="card"><h3>Score vs feature (2)</h3><img src="diagnostics/scatter_score_vs_feature_2.png" /></div>
+    <div class="card"><h3>Score vs feature (3)</h3><img src="diagnostics/scatter_score_vs_feature_3.png" /></div>
+  </div>
 </div>
 
 </body>
@@ -1184,55 +1414,82 @@ def main():
         comm = community_labels(G)
         df["community_id"] = df["source_id"].astype(str).map(comm).fillna(-1).astype(int)
 
+    profile = compute_viz_profile(df, G, graph_path, args)
     _safe_call(
         "A) Hidden Constellations",
         [(out_dir / "01_hidden_constellations_sky.png", "png")],
         lambda: plot_hidden_constellations(df, G, out_dir / "01_hidden_constellations_sky.png"),
+        profile=profile,
     )
     _safe_call(
         "B) Celestial Sphere 3D",
         [(out_dir / "02_celestial_sphere_3d.html", "html")],
         lambda: export_celestial_sphere(df, out_dir / "02_celestial_sphere_3d.html"),
+        profile=profile,
     )
     _safe_call(
         "C) Network Explorer",
         [(out_dir / "03_network_explorer.html", "html")],
         lambda: export_network_explorer(df, G, out_dir / "03_network_explorer.html"),
+        profile=profile,
+    )
+    _safe_call(
+        "J) Graph layout cloud",
+        [(out_dir / "13_graph_layout_cloud.png", "png"), (out_dir / "14_graph_layout_cloud.html", "html")],
+        lambda: export_graph_layout_cloud(df, G, out_dir / "13_graph_layout_cloud.png", out_dir / "14_graph_layout_cloud.html"),
+        profile=profile,
     )
     _safe_call(
         "D) Explainability Heatmap",
         [(out_dir / "04_explainability_heatmap.png", "png")],
         lambda: plot_explainability_heatmap(df, explain, out_dir / "04_explainability_heatmap.png", top_n=40),
+        profile=profile,
     )
     _safe_call(
         "D) Feature Interaction Heatmap",
         [(out_dir / "05_feature_interaction_heatmap.png", "png")],
         lambda: plot_feature_interaction_heatmap(df, out_dir / "05_feature_interaction_heatmap.png"),
+        profile=profile,
     )
     _safe_call(
         "F) Proper Motion Trails",
         [(out_dir / "07_proper_motion_trails.gif", "gif")],
         lambda: export_proper_motion_trails(df, out_dir / "07_proper_motion_trails.gif", top_k=30, frames=24),
+        profile=profile,
     )
     _safe_call(
         "G) Feature BioCubes",
         [(out_dir / "08_feature_biocubes.html", "html")],
         lambda: export_feature_biocubes(df, out_dir / "08_feature_biocubes.html"),
+        profile=profile,
     )
     _safe_call(
         "H) UMAP cosmic cloud",
         [(out_dir / "09_umap_cosmic_cloud.png", "png"), (out_dir / "10_umap_cosmic_cloud.html", "html")],
         lambda: export_umap(df, out_dir / "09_umap_cosmic_cloud.png", out_dir / "10_umap_cosmic_cloud.html"),
+        profile=profile,
     )
     _safe_call(
         "I) HR/CMD outliers",
         [(out_dir / "11_hr_cmd_outliers.png", "png"), (out_dir / "12_hr_cmd_outliers.html", "html")],
         lambda: plot_hr_cmd_outliers(df, out_dir / "11_hr_cmd_outliers.png", out_dir / "12_hr_cmd_outliers.html"),
+        profile=profile,
+    )
+    _safe_call(
+        "Diagnostics",
+        [
+            (out_dir / "diagnostics" / "scatter_score_vs_feature_1.png", "png"),
+            (out_dir / "diagnostics" / "scatter_score_vs_feature_2.png", "png"),
+            (out_dir / "diagnostics" / "scatter_score_vs_feature_3.png", "png"),
+        ],
+        lambda: export_diagnostics(df, out_dir, profile),
+        profile=profile,
     )
     _safe_call(
         "E) Explorer Dashboard",
         [(out_dir / "06_explorer_dashboard.html", "html")],
         lambda: export_dashboard(out_dir),
+        profile=profile,
     )
 
     print("OK: wrote A→H (+HR/CMD) gallery to:", out_dir)
