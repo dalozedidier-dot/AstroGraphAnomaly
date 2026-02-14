@@ -817,7 +817,11 @@ def export_proper_motion_trails(df: pd.DataFrame, out_gif: Path, top_k: int = 30
 
         fig.canvas.draw()
         w, h = fig.canvas.get_width_height()
-        img = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8).reshape(h, w, 3)
+        buf = np.asarray(fig.canvas.buffer_rgba())
+        # Matplotlib versions differ: sometimes this is (h, w, 4), sometimes a flat buffer.
+        if getattr(buf, "ndim", 1) == 1:
+            buf = buf.reshape(h, w, 4)
+        img = buf[..., :3].copy()
         frames_list.append(img)
         plt.close(fig)
 
@@ -983,89 +987,110 @@ def plot_feature_interaction_heatmap(df: pd.DataFrame, out_png: Path) -> None:
 
 def plot_hr_cmd_outliers(df: pd.DataFrame, out_png: Path, out_html: Path) -> None:
     """
-    I) HR/CMD-style outliers (Hertzsprung–Russell / Color-Magnitude Diagram).
-    Uses:
-      - x: bp_rp (color)
-      - y: absolute G magnitude (requires parallax + phot_g_mean_mag)
+    I) HR/CMD-style outliers (Hertzsprung Russell / Color Magnitude Diagram).
+
+    Preferred axes:
+      x = bp_rp (color)
+      y = absolute G magnitude (needs parallax and phot_g_mean_mag)
+
+    Robust fallbacks when BP RP is not available:
+      x = ruwe (proxy) or parallax (proxy)
+      y = phot_g_mean_mag (proxy) or absolute magnitude if possible
+
+    Goal: never return an empty panel for datasets that do not include BP RP bands.
     """
-    # Accept either:
-    # - precomputed bp_rp
-    # - or (phot_bp_mean_mag - phot_rp_mean_mag)
+    df = df.copy()
+
+    # X axis
+    x = None
+    x_label = None
     if "bp_rp" in df.columns:
-        bp_rp = pd.to_numeric(df["bp_rp"], errors="coerce").to_numpy(float)
+        x = pd.to_numeric(df["bp_rp"], errors="coerce").to_numpy(float)
+        x_label = "BP-RP"
     elif {"phot_bp_mean_mag", "phot_rp_mean_mag"}.issubset(set(df.columns)):
         bp = pd.to_numeric(df["phot_bp_mean_mag"], errors="coerce").to_numpy(float)
         rp = pd.to_numeric(df["phot_rp_mean_mag"], errors="coerce").to_numpy(float)
-        bp_rp = bp - rp
+        x = bp - rp
+        x_label = "BP-RP derived"
+    elif "ruwe" in df.columns:
+        x = pd.to_numeric(df["ruwe"], errors="coerce").to_numpy(float)
+        x_label = "RUWE proxy"
+    elif "parallax" in df.columns:
+        x = pd.to_numeric(df["parallax"], errors="coerce").to_numpy(float)
+        x_label = "Parallax mas proxy"
     else:
-        _placeholder_png(out_png, "HR/CMD outliers", "Missing required color columns (bp_rp or phot_bp_mean_mag+phot_rp_mean_mag).")
-        _placeholder_html(out_html, "HR/CMD outliers", "Missing required color columns (bp_rp or phot_bp_mean_mag+phot_rp_mean_mag).")
+        _placeholder_png(out_png, "HR/CMD outliers", "Missing x-axis columns.")
+        _placeholder_html(out_html, "HR/CMD outliers", "Missing x-axis columns.")
         return
 
-    if not {"phot_g_mean_mag", "parallax"}.issubset(set(df.columns)):
-        _placeholder_png(out_png, "HR/CMD outliers", "Missing required columns (phot_g_mean_mag, parallax).")
-        _placeholder_html(out_html, "HR/CMD outliers", "Missing required columns (phot_g_mean_mag, parallax).")
-        return
-
-    gmag = pd.to_numeric(df["phot_g_mean_mag"], errors="coerce").to_numpy(float)
-    plx = pd.to_numeric(df["parallax"], errors="coerce").to_numpy(float)
-
-    # Absolute magnitude: M_G = G + 5*log10(parallax_mas) - 10
-    with np.errstate(divide="ignore", invalid="ignore"):
-        abs_g = gmag + 5.0 * np.log10(np.clip(plx, 1e-6, None)) - 10.0
-
-    mask = np.isfinite(bp_rp) & np.isfinite(abs_g)
-    if mask.sum() < 10:
-        _placeholder_png(out_png, "HR/CMD outliers", "Not enough finite points to plot.")
-        _placeholder_html(out_html, "HR/CMD outliers", "Not enough finite points to plot.")
-        return
-
-    val = df["viz_color_value"].to_numpy(float) if "viz_color_value" in df.columns else df["anomaly_score_norm"].to_numpy(float)
-    size = df["viz_size"].to_numpy(float) if "viz_size" in df.columns else (3 + 10*val)
-    has_viz_color = "viz_color" in df.columns and df["viz_color"].notna().any()
-    colors = df["viz_color"].fillna("#888888").astype(str).to_list() if has_viz_color else None
-
-    # PNG
-    fig = plt.figure(figsize=(10, 8))
-    if has_viz_color and colors is not None:
-        plt.scatter(bp_rp[mask], abs_g[mask], s=16, alpha=0.78, c=np.asarray(colors)[mask])
-        plt.title("HR/CMD outliers — incoherence colors")
+    # Y axis
+    y = None
+    y_label = None
+    if {"phot_g_mean_mag", "parallax"}.issubset(set(df.columns)):
+        g = pd.to_numeric(df["phot_g_mean_mag"], errors="coerce").to_numpy(float)
+        plx = pd.to_numeric(df["parallax"], errors="coerce").to_numpy(float)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            y = g + 5.0 * np.log10(plx) - 10.0
+        y_label = "M_G abs"
+    elif "phot_g_mean_mag" in df.columns:
+        y = pd.to_numeric(df["phot_g_mean_mag"], errors="coerce").to_numpy(float)
+        y_label = "G mag proxy"
+    elif "mean_mag_g_fov" in df.columns:
+        y = pd.to_numeric(df["mean_mag_g_fov"], errors="coerce").to_numpy(float)
+        y_label = "mean_mag_g_fov proxy"
     else:
-        plt.scatter(bp_rp[mask], abs_g[mask], s=16, alpha=0.78, c=val[mask])
-        plt.colorbar(label="anomaly / incoherence")
-        plt.title("HR/CMD outliers")
-    plt.xlabel("BP-RP")
-    plt.ylabel("M_G (absolute)")
-    plt.gca().invert_yaxis()
-    plt.grid(alpha=0.15)
-    fig.savefig(out_png, dpi=320, bbox_inches="tight")
+        _placeholder_png(out_png, "HR/CMD outliers", "Missing y-axis columns.")
+        _placeholder_html(out_html, "HR/CMD outliers", "Missing y-axis columns.")
+        return
+
+    m = np.isfinite(x) & np.isfinite(y)
+    if int(np.sum(m)) < 10:
+        _placeholder_png(out_png, "HR/CMD outliers", "Not enough finite points.")
+        _placeholder_html(out_html, "HR/CMD outliers", "Not enough finite points.")
+        return
+
+    xs = x[m]
+    ys = y[m]
+
+    score = pd.to_numeric(df.get("anomaly_score_norm", df.get("anomaly_score", 0.0)), errors="coerce").fillna(0.0).to_numpy(float)
+    score = score[m]
+    top_n = min(120, max(20, int(0.10 * len(xs))))
+    idx = np.argsort(score)[::-1]
+    top = idx[:top_n]
+
+    out_png.parent.mkdir(parents=True, exist_ok=True)
+    fig = plt.figure(figsize=(8.8, 6.6), dpi=170)
+    ax = plt.gca()
+    ax.set_facecolor("#07080c")
+    fig.patch.set_facecolor("#07080c")
+    ax.scatter(xs, ys, s=10, alpha=0.55)
+    ax.scatter(xs[top], ys[top], s=26, alpha=0.95)
+    ax.set_title("HR/CMD outliers", color="white")
+    ax.set_xlabel(x_label, color="white")
+    ax.set_ylabel(y_label, color="white")
+    ax.tick_params(colors="white")
+    for spine in ax.spines.values():
+        spine.set_color("#333")
+    try:
+        ax.invert_yaxis()
+    except Exception:
+        pass
+    fig.savefig(out_png, dpi=220, bbox_inches="tight")
     plt.close(fig)
 
-    # HTML
     if not _HAS_PLOTLY:
         _placeholder_html(out_html, "HR/CMD outliers", "Plotly not installed. Install requirements_viz.txt.")
         return
 
-    hover_cols = [c for c in ["source_id","viz_category","anomaly_score_hi","phot_g_mean_mag","bp_rp","parallax","ruwe","community_id"] if c in df.columns]
-    hover = df[hover_cols].astype(str).agg("<br>".join, axis=1) if hover_cols else None
-
-    if has_viz_color and colors is not None:
-        marker = dict(size=4 + 0.6*size[mask], color=np.asarray(colors)[mask].tolist(), opacity=0.88)
-    else:
-        marker = dict(size=4 + 0.6*size[mask], color=val[mask], colorscale="Viridis", opacity=0.88, colorbar=dict(title="Anomaly / Incoherence"))
-
-    fig2 = go.Figure(data=[go.Scattergl(
-        x=bp_rp[mask], y=abs_g[mask],
-        mode="markers",
-        marker=marker,
-        text=hover[mask] if hover is not None else None,
-        hoverinfo="text" if hover is not None else "skip"
-    )])
-    fig2.update_layout(title="HR/CMD outliers (interactive)", margin=dict(l=0, r=0, b=0, t=40))
-    fig2.update_yaxes(autorange="reversed", title="M_G (absolute)")
-    fig2.update_xaxes(title="BP-RP")
-    _write_plotly_html(fig2, out_html, "Plotly interactive")
-
+    try:
+        fig3 = go.Figure()
+        fig3.add_trace(go.Scattergl(x=xs, y=ys, mode="markers", marker=dict(size=5, opacity=0.55), name="all"))
+        fig3.add_trace(go.Scattergl(x=xs[top], y=ys[top], mode="markers", marker=dict(size=7, opacity=0.95), name="top anomalies"))
+        fig3.update_layout(title="HR/CMD outliers", xaxis_title=x_label, yaxis_title=y_label, template="plotly_dark")
+        fig3.update_yaxes(autorange="reversed")
+        _write_plotly_html(fig3, out_html, "HR/CMD outliers")
+    except Exception as e:
+        _placeholder_html(out_html, "HR/CMD outliers", f"Plotly export failed: {e}")
 
 def export_dashboard(out_dir: Path) -> None:
     rel = lambda p: p.name
