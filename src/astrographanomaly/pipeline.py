@@ -24,6 +24,7 @@ from .detection.ensemble import (
 from .thresholds import ThresholdConfig, label_anomalies
 from .reporting.io import write_outputs
 from .reporting.plots import save_basic_plots, save_graph_plot
+from .reporting.report import build_summary, write_report
 from .utils.manifest import write_manifest
 from .llm.prompt_templates import build_prompt
 
@@ -314,11 +315,24 @@ def run_pipeline(
             include_graph_constraint=bool(ensemble_include_graph_constraint),
             graph_weight=float(ensemble_graph_weight),
         )
+
+    # 9) Human-readable report (summary.json + self-contained report.html)
+    run_meta = {"n_nodes": G.number_of_nodes(), "n_edges": G.number_of_edges()}
+    summary = build_summary(df_scored, df_top, G, config=config, run_meta=run_meta)
+    report_artefacts = write_report(
+        out_dir,
+        summary=summary,
+        df_top=df_top,
+        plots_dir=(out / "plots") if plots else None,
+    )
+    artefacts.update(report_artefacts)
+
     write_manifest(out_dir, config=config, artefacts=artefacts)
 
     return {
         "out_dir": str(out),
         "artefacts": artefacts,
+        "summary": summary,
         "n_rows": int(len(df_raw)),
         "n_nodes": int(G.number_of_nodes()),
         "n_edges": int(G.number_of_edges()),

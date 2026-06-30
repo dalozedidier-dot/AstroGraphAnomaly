@@ -74,7 +74,7 @@ def main():
 
     a = p.parse_args()
 
-    run_pipeline(
+    res = run_pipeline(
         mode=a.mode,
         in_csv=a.in_csv,
         ra=a.ra, dec=a.dec, radius_deg=a.radius_deg, limit=a.limit,
@@ -96,6 +96,15 @@ def main():
         ensemble_include_graph_constraint=(not bool(a.ensemble_no_graph_constraint)),
         ensemble_graph_weight=float(a.ensemble_graph_weight),
     )
+
+    counts = (res.get("summary") or {}).get("counts", {})
+    print(
+        f"[run_workflow] done: {counts.get('n_anomalies', '?')} anomalies / "
+        f"{counts.get('n_rows', res.get('n_rows', '?'))} sources -> {a.out}"
+    )
+    report = (res.get("artefacts") or {}).get("report")
+    if report:
+        print(f"[run_workflow] report: {a.out}/{report}")
 
 if __name__ == "__main__":
     main()

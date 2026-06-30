@@ -94,6 +94,21 @@ def main(argv=None):
     )
 
     if args.mode == "gaia":
-        run_pipeline(ra=args.ra, dec=args.dec, radius_deg=args.radius_deg, limit=args.limit, **common)
+        res = run_pipeline(ra=args.ra, dec=args.dec, radius_deg=args.radius_deg, limit=args.limit, **common)
     else:
-        run_pipeline(in_csv=args.in_csv, **common)
+        res = run_pipeline(in_csv=args.in_csv, **common)
+
+    _print_run_summary(res)
+
+
+def _print_run_summary(res: dict) -> None:
+    counts = (res.get("summary") or {}).get("counts", {})
+    out_dir = res.get("out_dir", "")
+    print(
+        f"[astrographanomaly] done: {counts.get('n_anomalies', '?')} anomalies / "
+        f"{counts.get('n_rows', res.get('n_rows', '?'))} sources · "
+        f"{res.get('n_edges', '?')} edges"
+    )
+    report = (res.get("artefacts") or {}).get("report")
+    if report:
+        print(f"[astrographanomaly] report: {out_dir}/{report}")
