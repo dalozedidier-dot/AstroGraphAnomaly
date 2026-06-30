@@ -15,3 +15,25 @@
 
 ## 4) Run Gaia (réseau requis)
 - `python -m astrographanomaly gaia ...`
+
+## 5) Publier la page des modèles
+
+Le dépôt contient aussi une page statique :
+
+- `index.html`
+- `models.html`
+- `docs/MODELS.md`
+- `.github/workflows/pages.yml`
+
+Pour la publier proprement :
+
+1. Aller dans **Settings → Pages**.
+2. Choisir **Source → GitHub Actions**.
+3. Lancer ou attendre le workflow **deploy_pages**.
+
+Page finale :
+
+```text
+https://<USER>.github.io/<REPO>/models.html
+```
+
