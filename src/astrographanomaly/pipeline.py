@@ -172,24 +172,27 @@ def run_pipeline(
     df_scored = df_raw.merge(df_scored, on="source_id", how="left")
 
     # Propagate anomaly fields into graph attributes for GraphML export.
+    # Graph node IDs are strings (see build_knn_graph), so keys must be stringified
+    # to match; otherwise set_node_attributes silently drops every entry.
     try:
-        score_attr = {int(r["source_id"]): float(r["anomaly_score"]) for _, r in df_scored.iterrows()}
-        label_attr = {int(r["source_id"]): int(r["anomaly_label"]) for _, r in df_scored.iterrows()}
+        score_attr = {str(int(r["source_id"])): float(r["anomaly_score"]) for _, r in df_scored.iterrows()}
+        label_attr = {str(int(r["source_id"])): int(r["anomaly_label"]) for _, r in df_scored.iterrows()}
         nx.set_node_attributes(G, score_attr, "anomaly_score")
         nx.set_node_attributes(G, label_attr, "anomaly_label")
 
         if engine == "ensemble" and per_constraint_raw is not None and per_constraint_phi is not None:
             for name, arr in per_constraint_raw.items():
-                nx.set_node_attributes(G, {int(sid): float(arr[i]) for i, sid in enumerate(node_list)}, f"score_{name}")
+                nx.set_node_attributes(G, {str(int(sid)): float(arr[i]) for i, sid in enumerate(node_list)}, f"score_{name}")
             for name, arr in per_constraint_phi.items():
-                nx.set_node_attributes(G, {int(sid): float(arr[i]) for i, sid in enumerate(node_list)}, f"phi_{name}")
+                nx.set_node_attributes(G, {str(int(sid)): float(arr[i]) for i, sid in enumerate(node_list)}, f"phi_{name}")
     except Exception:
         # GraphML export remains valid even if attribute propagation fails.
         pass
 
-    # Top anomalies (by score desc)
+    # Top anomalies (by score desc). Graph node IDs are strings, so the subgraph
+    # selection must use stringified source_ids to actually match nodes.
     df_top = df_scored.sort_values("anomaly_score", ascending=False).head(int(top_k)).copy()
-    top_nodes = set(df_top["source_id"].astype("int64").tolist())
+    top_nodes = set(df_top["source_id"].astype("int64").astype(str).tolist())
     G_top = G.subgraph(top_nodes).copy()
 
     # 5) Exports
@@ -268,7 +271,7 @@ def run_pipeline(
     # 7) Plots
     if plots:
         save_basic_plots(out_dir, df_scored)
-        anomalies = set(df_scored.loc[df_scored["anomaly_label"] == -1, "source_id"].astype("int64").tolist())
+        anomalies = set(df_scored.loc[df_scored["anomaly_label"] == -1, "source_id"].astype("int64").astype(str).tolist())
         save_graph_plot(out_dir, G_top, anomalies=anomalies.intersection(top_nodes))
 
     # 8) Manifest
