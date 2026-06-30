@@ -329,8 +329,16 @@ def _write_plotly_html(fig, out_html: Path, title: str) -> None:
 
     out_html.parent.mkdir(parents=True, exist_ok=True)
     try:
-        # If a 3D scene exists, prefer a turntable dragmode for axis-aligned rotation.
-        fig.update_layout(scene=dict(dragmode="turntable"))
+        is_3d = any("3d" in (getattr(tr, "type", "") or "") for tr in fig.data)
+        if is_3d:
+            # Harmonized deep-space theme for every 3D view: near-black background,
+            # turntable rotation, and a readable dark title. update_layout merges,
+            # so per-figure axis settings (hidden axes, titles) are preserved.
+            fig.update_layout(
+                template="plotly_dark",
+                paper_bgcolor="#05060a",
+                scene=dict(dragmode="turntable", bgcolor="#05060a"),
+            )
     except Exception:
         pass
 

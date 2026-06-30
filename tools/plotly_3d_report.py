@@ -12,21 +12,28 @@ Expected in --run-dir:
 
 Writes:
 <run_dir>/viz_plotly_3d/
+  - index.html               (gallery linking every view)
   - 01_star_cloud_xyz.html
   - 02_celestial_sphere.html
-  - 03_graph_topk_3d.html (if graph_topk.graphml exists)
-  - 04_graph_full_3d.html (if graph_full.graphml exists)
+  - 03_graph_topk_3d.html     (if graph_topk.graphml exists)
+  - 04_graph_full_3d.html     (if graph_full.graphml exists)
 
 Install:
   pip install "plotly>=5.20"
 
 Usage:
   python tools/plotly_3d_report.py --run-dir results/<run>
+  python tools/plotly_3d_report.py --run-dir results/<run> --style scientific --colorscale Turbo
 
-Notes on "style":
-- style=default is tuned for the most common usage: exploration + showcase readability
-  It uses aspectmode=cube + larger height + orbit dragmode.
-- style=scientific preserves data proportions via aspectmode=data.
+Visual design
+-------------
+- A dark "deep-space" theme (near-black background, hidden axis clutter) so the
+  point clouds and graphs read like a sky map rather than a lab plot.
+- A score colorbar so colors are interpretable.
+- Anomalies (anomaly_label == -1) are drawn as a distinct, bright overlay so they
+  pop out of the field instead of blending in.
+- style=default tunes the camera/aspect for showcase readability (aspectmode=cube);
+  style=scientific preserves true data proportions (aspectmode=data).
 """
 
 from __future__ import annotations
@@ -34,13 +41,26 @@ from __future__ import annotations
 import argparse
 import math
 from pathlib import Path
-from typing import List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
 import networkx as nx
 
 import plotly.graph_objects as go
+
+
+# Deep-space palette.
+_BG = "#05060a"
+_ANOMALY_COLOR = "#ff3b6b"
+_AXIS = dict(
+    showbackground=False,
+    showgrid=False,
+    zeroline=False,
+    showticklabels=False,
+    showspikes=False,
+    title="",
+)
 
 
 def radec_to_unit_xyz(ra_deg: np.ndarray, dec_deg: np.ndarray) -> np.ndarray:
@@ -85,26 +105,32 @@ def score_hi(df: pd.DataFrame) -> np.ndarray:
     return s
 
 
+def anomaly_mask(df: pd.DataFrame) -> np.ndarray:
+    if "anomaly_label" not in df.columns:
+        return np.zeros(len(df), dtype=bool)
+    y = pd.to_numeric(df["anomaly_label"], errors="coerce").fillna(1).to_numpy(int)
+    return y == -1
+
+
+def marker_sizes(c01: np.ndarray, base: float = 2.4, span: float = 4.2) -> np.ndarray:
+    """Subtle size growth with score so high-score points carry more visual weight."""
+    return base + span * np.clip(np.asarray(c01, dtype=float), 0.0, 1.0)
+
+
 def hover_text(df: pd.DataFrame) -> List[str]:
+    """Vectorized hover labels (avoids per-row DataFrame iteration)."""
     cols = [c for c in ["source_id", "anomaly_score", "anomaly_label", "ra", "dec", "distance"] if c in df.columns]
-    out: List[str] = []
-    for _, r in df.iterrows():
-        parts: List[str] = []
-        for c in cols:
-            v = r[c]
-            if isinstance(v, float):
-                if not math.isfinite(v):
-                    continue
-                if c in {"ra", "dec"}:
-                    parts.append(f"{c}={v:.4f}")
-                elif c == "distance":
-                    parts.append(f"{c}={v:.1f}")
-                else:
-                    parts.append(f"{c}={v:.4f}")
-            else:
-                parts.append(f"{c}={v}")
-        out.append("<br>".join(parts))
-    return out
+    fmt = {"ra": "{:.4f}", "dec": "{:.4f}", "distance": "{:.1f}", "anomaly_score": "{:.4f}"}
+    pieces: Dict[str, np.ndarray] = {}
+    for c in cols:
+        s = df[c]
+        if pd.api.types.is_float_dtype(s):
+            f = fmt.get(c, "{:.4f}")
+            pieces[c] = np.array([f"{c}={f.format(v)}" if math.isfinite(v) else "" for v in s.to_numpy(float)])
+        else:
+            pieces[c] = np.array([f"{c}={v}" for v in s.tolist()])
+    rows = ["<br>".join(p for p in parts if p) for parts in zip(*[pieces[c] for c in cols])]
+    return rows
 
 
 def write_html(fig: "go.Figure", out_html: Path) -> None:
@@ -113,20 +139,100 @@ def write_html(fig: "go.Figure", out_html: Path) -> None:
 
 def apply_3d_layout(fig: "go.Figure", title: str, style: str, height: int) -> None:
     if style == "scientific":
-        scene = dict(aspectmode="data")
+        aspect = dict(aspectmode="data")
         camera = dict(eye=dict(x=1.25, y=1.25, z=1.05))
     else:
-        scene = dict(aspectmode="cube")
+        aspect = dict(aspectmode="cube")
         camera = dict(eye=dict(x=1.45, y=1.45, z=1.15))
 
     fig.update_layout(
-        title=title,
+        title=dict(text=title, font=dict(color="#e8e8ef", size=18)),
         height=height,
+        template="plotly_dark",
+        paper_bgcolor=_BG,
         dragmode="orbit",
-        scene={**scene, "camera": camera},
+        scene={
+            **aspect,
+            "camera": camera,
+            "bgcolor": _BG,
+            "xaxis": _AXIS,
+            "yaxis": _AXIS,
+            "zaxis": _AXIS,
+        },
         margin=dict(l=0, r=0, t=55, b=0),
-        showlegend=False,
+        legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color="#e8e8ef")),
+        showlegend=True,
     )
+
+
+def _colorbar(title: str) -> dict:
+    return dict(
+        title=dict(text=title, side="right", font=dict(color="#e8e8ef")),
+        thickness=12,
+        len=0.6,
+        tickfont=dict(color="#cfd0d8"),
+        outlinewidth=0,
+    )
+
+
+def _field_trace(xyz: np.ndarray, c01: np.ndarray, text: List[str], colorscale: str) -> go.Scatter3d:
+    return go.Scatter3d(
+        x=xyz[:, 0],
+        y=xyz[:, 1],
+        z=xyz[:, 2],
+        mode="markers",
+        name="sources",
+        marker=dict(
+            size=marker_sizes(c01),
+            opacity=0.82,
+            color=c01,
+            colorscale=colorscale,
+            cmin=0.0,
+            cmax=1.0,
+            colorbar=_colorbar("Anomaly score (robust 0..1)"),
+            showscale=True,
+        ),
+        text=text,
+        hoverinfo="text",
+    )
+
+
+def _anomaly_trace(xyz: np.ndarray, text: List[str]) -> go.Scatter3d:
+    return go.Scatter3d(
+        x=xyz[:, 0],
+        y=xyz[:, 1],
+        z=xyz[:, 2],
+        mode="markers",
+        name="anomalies",
+        marker=dict(
+            size=7,
+            symbol="diamond",
+            color=_ANOMALY_COLOR,
+            opacity=0.95,
+            line=dict(color="#ffffff", width=1),
+        ),
+        text=text,
+        hoverinfo="text",
+    )
+
+
+def _reference_sphere(n_lines: int = 12, n_pts: int = 60) -> List[go.Scatter3d]:
+    """Faint lat/long wireframe for orientation in the celestial-sphere view."""
+    traces: List[go.Scatter3d] = []
+    line = dict(color="rgba(120,140,180,0.18)", width=1)
+    # Parallels (constant declination).
+    for dec in np.linspace(-75, 75, n_lines):
+        ra = np.linspace(0, 360, n_pts)
+        xyz = radec_to_unit_xyz(ra, np.full_like(ra, dec))
+        traces.append(go.Scatter3d(x=xyz[:, 0], y=xyz[:, 1], z=xyz[:, 2],
+                                   mode="lines", line=line, hoverinfo="none", showlegend=False))
+    # Meridians (constant right ascension).
+    for ra0 in np.linspace(0, 360, n_lines, endpoint=False):
+        dec = np.linspace(-90, 90, n_pts)
+        xyz = radec_to_unit_xyz(np.full_like(dec, ra0), dec)
+        traces.append(go.Scatter3d(x=xyz[:, 0], y=xyz[:, 1], z=xyz[:, 2],
+                                   mode="lines", line=line, hoverinfo="none", showlegend=False))
+    return traces
 
 
 def depth_scale_default(dist: np.ndarray) -> np.ndarray:
@@ -150,7 +256,7 @@ def depth_scale_default(dist: np.ndarray) -> np.ndarray:
     return rr
 
 
-def plot_star_cloud(df: pd.DataFrame, out_html: Path, style: str, height: int) -> bool:
+def plot_star_cloud(df: pd.DataFrame, out_html: Path, style: str, height: int, colorscale: str) -> bool:
     if not {"ra", "dec", "distance"}.issubset(df.columns):
         return False
 
@@ -167,28 +273,21 @@ def plot_star_cloud(df: pd.DataFrame, out_html: Path, style: str, height: int) -
     xyz = uv * rr.reshape(-1, 1)
 
     dfm = df.iloc[np.where(m)[0]]
-    s = score_hi(dfm)
-    c = robust_01(s)
+    c = robust_01(score_hi(dfm))
+    text = hover_text(dfm)
 
-    fig = go.Figure(
-        data=[
-            go.Scatter3d(
-                x=xyz[:, 0],
-                y=xyz[:, 1],
-                z=xyz[:, 2],
-                mode="markers",
-                marker=dict(size=3, opacity=0.85, color=c, colorscale="Viridis"),
-                text=hover_text(dfm),
-                hoverinfo="text",
-            )
-        ]
-    )
-    apply_3d_layout(fig, "Star cloud 3D (RA, Dec with depth scaling)", style=style, height=height)
+    data = [_field_trace(xyz, c, text, colorscale)]
+    am = anomaly_mask(dfm)
+    if np.any(am):
+        data.append(_anomaly_trace(xyz[am], [t for t, k in zip(text, am) if k]))
+
+    fig = go.Figure(data=data)
+    apply_3d_layout(fig, "Star cloud 3D — RA/Dec with depth scaling", style=style, height=height)
     write_html(fig, out_html)
     return True
 
 
-def plot_celestial_sphere(df: pd.DataFrame, out_html: Path, style: str, height: int) -> bool:
+def plot_celestial_sphere(df: pd.DataFrame, out_html: Path, style: str, height: int, colorscale: str) -> bool:
     if not {"ra", "dec"}.issubset(df.columns):
         return False
 
@@ -201,23 +300,17 @@ def plot_celestial_sphere(df: pd.DataFrame, out_html: Path, style: str, height: 
 
     xyz = radec_to_unit_xyz(ra[m], dec[m])
     dfm = df.iloc[np.where(m)[0]]
-    s = score_hi(dfm)
-    c = robust_01(s)
+    c = robust_01(score_hi(dfm))
+    text = hover_text(dfm)
 
-    fig = go.Figure(
-        data=[
-            go.Scatter3d(
-                x=xyz[:, 0],
-                y=xyz[:, 1],
-                z=xyz[:, 2],
-                mode="markers",
-                marker=dict(size=3, opacity=0.85, color=c, colorscale="Viridis"),
-                text=hover_text(dfm),
-                hoverinfo="text",
-            )
-        ]
-    )
-    apply_3d_layout(fig, "Celestial sphere 3D (unit vectors from RA/Dec)", style=style, height=height)
+    data: List[go.Scatter3d] = list(_reference_sphere())
+    data.append(_field_trace(xyz, c, text, colorscale))
+    am = anomaly_mask(dfm)
+    if np.any(am):
+        data.append(_anomaly_trace(xyz[am], [t for t, k in zip(text, am) if k]))
+
+    fig = go.Figure(data=data)
+    apply_3d_layout(fig, "Celestial sphere 3D — unit vectors from RA/Dec", style=style, height=height)
     write_html(fig, out_html)
     return True
 
@@ -239,7 +332,7 @@ def graph_positions_from_node_attrs(G: nx.Graph) -> dict[str, Tuple[float, float
     return pos
 
 
-def plot_graph_3d(G: nx.Graph, df: pd.DataFrame, out_html: Path, title: str, style: str, height: int) -> None:
+def plot_graph_3d(G: nx.Graph, df: pd.DataFrame, out_html: Path, title: str, style: str, height: int, colorscale: str) -> None:
     pos = graph_positions_from_node_attrs(G)
     if len(pos) < 10:
         raw = nx.spring_layout(G, dim=3, seed=42)
@@ -249,8 +342,8 @@ def plot_graph_3d(G: nx.Graph, df: pd.DataFrame, out_html: Path, title: str, sty
     if "source_id" in df2.columns:
         df2["source_id"] = df2["source_id"].astype(str)
 
-    score_map = {}
-    label_map = {}
+    score_map: Dict[str, float] = {}
+    label_map: Dict[str, int] = {}
 
     if {"source_id", "anomaly_score"}.issubset(df2.columns):
         scores = pd.to_numeric(df2["anomaly_score"], errors="coerce").to_numpy(float)
@@ -269,12 +362,11 @@ def plot_graph_3d(G: nx.Graph, df: pd.DataFrame, out_html: Path, title: str, sty
     nodes = [str(n) for n in G.nodes() if str(n) in pos]
     scores = np.array([score_map.get(n, 0.0) for n in nodes], dtype=float)
     colors = robust_01(scores)
-    sizes = [6 if label_map.get(n, 1) == -1 else 3 for n in nodes]
-    htxt = [f"source_id={n}<br>score={score_map.get(n,0.0):.4f}<br>label={label_map.get(n,1)}" for n in nodes]
+    htxt = [f"source_id={n}<br>score={score_map.get(n, 0.0):.4f}<br>label={label_map.get(n, 1)}" for n in nodes]
 
-    x = [pos[n][0] for n in nodes]
-    y = [pos[n][1] for n in nodes]
-    z = [pos[n][2] for n in nodes]
+    x = np.array([pos[n][0] for n in nodes])
+    y = np.array([pos[n][1] for n in nodes])
+    z = np.array([pos[n][2] for n in nodes])
 
     xe: List[Optional[float]] = []
     ye: List[Optional[float]] = []
@@ -287,26 +379,61 @@ def plot_graph_3d(G: nx.Graph, df: pd.DataFrame, out_html: Path, title: str, sty
             ze.extend([pos[su][2], pos[sv][2], None])
 
     edge_trace = go.Scatter3d(
-        x=xe,
-        y=ye,
-        z=ze,
-        mode="lines",
-        line=dict(width=1, color="rgba(160,160,160,0.18)"),
-        hoverinfo="none",
+        x=xe, y=ye, z=ze, mode="lines",
+        line=dict(width=1, color="rgba(150,170,210,0.16)"),
+        hoverinfo="none", name="edges", showlegend=False,
     )
     node_trace = go.Scatter3d(
-        x=x,
-        y=y,
-        z=z,
-        mode="markers",
-        marker=dict(size=sizes, opacity=0.90, color=colors, colorscale="Viridis"),
-        text=htxt,
-        hoverinfo="text",
+        x=x, y=y, z=z, mode="markers", name="sources",
+        marker=dict(
+            size=marker_sizes(colors, base=3.0, span=3.5),
+            opacity=0.9, color=colors, colorscale=colorscale,
+            cmin=0.0, cmax=1.0,
+            colorbar=_colorbar("Anomaly score (robust 0..1)"), showscale=True,
+        ),
+        text=htxt, hoverinfo="text",
     )
 
-    fig = go.Figure(data=[edge_trace, node_trace])
+    data = [edge_trace, node_trace]
+    am = np.array([label_map.get(n, 1) == -1 for n in nodes], dtype=bool)
+    if np.any(am):
+        data.append(_anomaly_trace(
+            np.column_stack([x[am], y[am], z[am]]),
+            [t for t, k in zip(htxt, am) if k],
+        ))
+
+    fig = go.Figure(data=data)
     apply_3d_layout(fig, title, style=style, height=height)
     write_html(fig, out_html)
+
+
+def write_index(out_dir: Path, entries: List[Tuple[str, str]]) -> None:
+    """Small dark gallery linking every generated 3D view."""
+    cards = "".join(
+        f'<a class="card" href="{href}"><span>{title}</span></a>' for title, href in entries
+    )
+    doc = f"""<!doctype html>
+<html lang="fr"><head><meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AstroGraphAnomaly — Vues 3D</title>
+<style>
+  body {{ font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+          background: {_BG}; color: #e8e8ef; margin: 0; padding: 32px; }}
+  h1 {{ font-weight: 700; letter-spacing: .02em; }}
+  .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; margin-top: 20px; }}
+  .card {{ display: flex; align-items: flex-end; min-height: 120px; padding: 16px;
+           border-radius: 14px; text-decoration: none; color: #fff; font-weight: 600;
+           background: linear-gradient(135deg, #11162b, #1d2547);
+           border: 1px solid rgba(120,140,200,.25); transition: transform .12s ease, border-color .12s; }}
+  .card:hover {{ transform: translateY(-3px); border-color: {_ANOMALY_COLOR}; }}
+</style></head>
+<body>
+  <h1>Vues 3D interactives</h1>
+  <p style="color:#9aa0b5">Glisser pour orbiter · molette pour zoomer · les anomalies sont en losanges roses.</p>
+  <div class="grid">{cards}</div>
+</body></html>
+"""
+    (out_dir / "index.html").write_text(doc, encoding="utf-8")
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -314,6 +441,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--run-dir", required=True)
     ap.add_argument("--style", choices=["default", "scientific"], default="default")
     ap.add_argument("--height", type=int, default=900)
+    ap.add_argument("--colorscale", default="Plasma", help="Plotly colorscale (e.g. Plasma, Viridis, Turbo, Inferno)")
     args = ap.parse_args(argv)
 
     run_dir = Path(args.run_dir)
@@ -326,34 +454,26 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     out_dir = run_dir / "viz_plotly_3d"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    plot_star_cloud(df, out_dir / "01_star_cloud_xyz.html", style=args.style, height=args.height)
-    plot_celestial_sphere(df, out_dir / "02_celestial_sphere.html", style=args.style, height=args.height)
+    entries: List[Tuple[str, str]] = []
+    if plot_star_cloud(df, out_dir / "01_star_cloud_xyz.html", args.style, args.height, args.colorscale):
+        entries.append(("Star cloud 3D", "01_star_cloud_xyz.html"))
+    if plot_celestial_sphere(df, out_dir / "02_celestial_sphere.html", args.style, args.height, args.colorscale):
+        entries.append(("Celestial sphere 3D", "02_celestial_sphere.html"))
 
     gt = run_dir / "graph_topk.graphml"
     if gt.exists():
-        Gt = nx.read_graphml(gt)
-        plot_graph_3d(
-            Gt,
-            df,
-            out_dir / "03_graph_topk_3d.html",
-            title="Graph top-k 3D (sky-space embedding)",
-            style=args.style,
-            height=args.height,
-        )
+        plot_graph_3d(nx.read_graphml(gt), df, out_dir / "03_graph_topk_3d.html",
+                      "Graph top-k 3D — sky-space embedding", args.style, args.height, args.colorscale)
+        entries.append(("Graph top-k 3D", "03_graph_topk_3d.html"))
 
     gf = run_dir / "graph_full.graphml"
     if gf.exists():
-        Gf = nx.read_graphml(gf)
-        plot_graph_3d(
-            Gf,
-            df,
-            out_dir / "04_graph_full_3d.html",
-            title="Graph full 3D (sky-space embedding)",
-            style=args.style,
-            height=args.height,
-        )
+        plot_graph_3d(nx.read_graphml(gf), df, out_dir / "04_graph_full_3d.html",
+                      "Graph full 3D — sky-space embedding", args.style, args.height, args.colorscale)
+        entries.append(("Graph full 3D", "04_graph_full_3d.html"))
 
-    print(f"[plotly_3d_report] wrote HTML into: {out_dir}")
+    write_index(out_dir, entries)
+    print(f"[plotly_3d_report] wrote {len(entries)} views + index.html into: {out_dir}")
     return 0
 
 

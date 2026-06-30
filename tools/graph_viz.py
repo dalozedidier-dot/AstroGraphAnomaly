@@ -439,20 +439,45 @@ def _plotly_force_3d(
         showlegend=False,
     )
 
-    fig = go.Figure(data=[edge_trace, node_trace])
+    data = [edge_trace, node_trace]
+
+    # Distinct overlay so anomalies pop out of the field instead of blending in.
+    anom = [n for n in nodes if int(label_map.get(n, 1)) == -1]
+    if anom:
+        data.append(
+            go.Scatter3d(
+                x=[float(pos[n][0]) for n in anom],
+                y=[float(pos[n][1]) for n in anom],
+                z=[float(pos[n][2]) for n in anom],
+                mode="markers",
+                name="anomalies",
+                marker=dict(size=float(node_size) * 2.0, symbol="diamond",
+                            color="#ff3b6b", opacity=0.95,
+                            line=dict(color="#ffffff", width=1)),
+                text=[_tooltip_html(n, score_map, label_map, weights_map, dict(G.nodes[n]), lime_top) for n in anom],
+                hoverinfo="text",
+                showlegend=True,
+            )
+        )
+
+    fig = go.Figure(data=data)
     fig.update_layout(
-        title=title,
+        title=dict(text=title, font=dict(color="#e8e8ef", size=18)),
         height=900,
+        template="plotly_dark",
+        paper_bgcolor="#05060a",
         dragmode="orbit",
         scene=dict(
             xaxis_visible=False,
             yaxis_visible=False,
             zaxis_visible=False,
             aspectmode="cube",
+            bgcolor="#05060a",
             camera=dict(eye=dict(x=1.45, y=1.45, z=1.15)),
         ),
         margin=dict(l=0, r=0, t=55, b=0),
-        showlegend=False,
+        legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color="#e8e8ef")),
+        showlegend=bool(anom),
     )
     return fig
 
