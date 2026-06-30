@@ -1,0 +1,64 @@
+name: deploy_pages_from_workflow_outputs
+
+# Build the GitHub Pages site from the project's own workflow outputs:
+# a fresh offline demo run (report + static plots + interactive Plotly 3D views)
+# is generated and laid out as a static site, then published to Pages.
+#
+# Requires (one-time): repo Settings → Pages → Source = "GitHub Actions".
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths:
+      - "index.html"
+      - "assets/**"
+      - "src/**"
+      - "tools/**"
+      - "data/sample_gaia_like.csv"
+      - ".github/workflows/deploy_pages_from_workflow_outputs.yml"
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow only one concurrent deployment; cancel in-progress runs for newer ones.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install "plotly>=5.20"
+
+      - name: Build site from workflow outputs
+        run: python tools/build_pages_site.py --out site
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
