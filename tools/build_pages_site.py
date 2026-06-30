@@ -221,6 +221,10 @@ def summarize_workflows() -> List[Dict[str, Any]]:
     return workflows
 
 
+def pills_html(values: Iterable[Any]) -> str:
+    return "".join(f'<span class="pill">{h(x)}</span>' for x in values)
+
+
 def collect_artifacts(run_dir: Path, site_run_dir: str) -> List[Dict[str, str]]:
     important = [
         ("Rapport HTML", "report.html", "Rapport auto-généré, lisible directement dans le navigateur."),
@@ -319,7 +323,7 @@ def build_index(
             flags.append(f"engine: {wf['engine_default']}")
         workflow_rows.append(
             f"<tr><td><a href=\"{h(link)}\">{h(wf['name'])}</a><br><span class=\"small muted\">{h(wf['file'])}</span></td>"
-            f"<td>{h(wf['trigger'])}</td><td>{h(wf['hint'])}</td><td>{''.join(f'<span class=\"pill\">{h(x)}</span>' for x in flags)}</td></tr>"
+            f"<td>{h(wf['trigger'])}</td><td>{h(wf['hint'])}</td><td>{pills_html(flags)}</td></tr>"
         )
 
     engine_cards = []
@@ -392,7 +396,7 @@ def build_index(
     </article>
     <article class=\"card\">
       <h2>Seuils disponibles</h2>
-      <p>{''.join(f'<span class=\"pill\">{h(x)}</span>' for x in thresholds)}</p>
+      <p>{pills_html(thresholds)}</p>
       <p class=\"muted small\">Le seuil transforme un score en liste exploitable. Ce n’est pas une preuve physique, c’est un triage.</p>
     </article>
 
