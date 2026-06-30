@@ -29,6 +29,8 @@ python run_workflow.py --mode gaia --ra 266.4051 --dec -28.936175 --radius-deg 0
 Chaque run produit :
 - `raw.csv`, `scored.csv`, `top_anomalies.csv`
 - `graph_full.graphml`, `graph_topk.graphml`
+- `summary.json` (stats du run : comptes, distribution des scores, stats graphe, top anomalies)
+- `report.html` (**rapport autonome** : cartes de stats + table top-anomalies + plots embarqués en base64, ouvrable hors-ligne)
 - `plots/*.png` (si `--plots`)
 - `explanations.jsonl` + `llm_prompts.jsonl` (si `--explain-top > 0`)
 - `manifest.json` (config + checksums)
