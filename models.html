@@ -1,0 +1,503 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AstroGraphAnomaly — Modèles & moteurs</title>
+  <meta name="description" content="Page de présentation des modèles proposés par AstroGraphAnomaly : Isolation Forest, LOF, One-Class SVM, Robust Z-Score, PineForest et Ensemble." />
+  <style>
+    :root {
+      --bg: #030014;
+      --panel: rgba(13, 17, 42, .78);
+      --panel2: rgba(20, 27, 62, .74);
+      --text: #eef2ff;
+      --muted: #a8b3cf;
+      --line: rgba(148, 163, 184, .24);
+      --cyan: #00d4ff;
+      --aqua: #00ffcc;
+      --violet: #a855f7;
+      --orange: #ff9f43;
+      --pink: #ff3d9a;
+      --green: #4ade80;
+      --red: #fb7185;
+      --shadow: 0 24px 80px rgba(0, 0, 0, .42);
+      --radius: 24px;
+      color-scheme: dark;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 12% 12%, rgba(168, 85, 247, .32), transparent 28rem),
+        radial-gradient(circle at 88% 8%, rgba(0, 212, 255, .25), transparent 25rem),
+        radial-gradient(circle at 50% 95%, rgba(0, 255, 204, .16), transparent 28rem),
+        linear-gradient(180deg, #030014 0%, #090720 55%, #030014 100%);
+      overflow-x: hidden;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      opacity: .58;
+      background-image:
+        radial-gradient(1px 1px at 12% 18%, #fff, transparent),
+        radial-gradient(1px 1px at 22% 48%, #fff, transparent),
+        radial-gradient(1px 1px at 32% 28%, #fff, transparent),
+        radial-gradient(1px 1px at 48% 76%, #fff, transparent),
+        radial-gradient(1px 1px at 58% 18%, #fff, transparent),
+        radial-gradient(1px 1px at 72% 68%, #fff, transparent),
+        radial-gradient(1px 1px at 84% 36%, #fff, transparent),
+        radial-gradient(1px 1px at 94% 82%, #fff, transparent);
+      background-size: 260px 260px;
+    }
+
+    a { color: inherit; }
+    .wrap { width: min(1180px, calc(100% - 32px)); margin: 0 auto; }
+
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      border-bottom: 1px solid var(--line);
+      background: rgba(3, 0, 20, .74);
+      backdrop-filter: blur(18px);
+    }
+    nav {
+      min-height: 68px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+    }
+    .brand {
+      font-weight: 900;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      color: var(--aqua);
+      text-decoration: none;
+    }
+    .navlinks { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+    .navlinks a {
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 700;
+    }
+    .navlinks a:hover { color: var(--text); }
+
+    .hero { padding: 92px 0 52px; }
+    .eyebrow {
+      display: inline-flex;
+      gap: 10px;
+      align-items: center;
+      padding: 9px 13px;
+      border: 1px solid rgba(0, 255, 204, .35);
+      border-radius: 999px;
+      color: var(--aqua);
+      background: rgba(0, 255, 204, .08);
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+    }
+    h1 {
+      margin: 20px 0 14px;
+      max-width: 980px;
+      font-size: clamp(42px, 7vw, 82px);
+      line-height: .94;
+      letter-spacing: -.06em;
+    }
+    .lead {
+      max-width: 840px;
+      color: var(--muted);
+      font-size: clamp(18px, 2.2vw, 23px);
+      line-height: 1.55;
+    }
+    .hero-actions { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 28px; }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 46px;
+      padding: 0 18px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      color: var(--text);
+      background: rgba(255, 255, 255, .07);
+      text-decoration: none;
+      font-weight: 850;
+    }
+    .btn.primary {
+      border-color: rgba(0, 212, 255, .44);
+      background: linear-gradient(135deg, rgba(0, 212, 255, .24), rgba(168, 85, 247, .22));
+      box-shadow: 0 0 34px rgba(0, 212, 255, .16);
+    }
+
+    .quick-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 14px;
+      margin: 44px 0 0;
+    }
+    .quick-card {
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      background: rgba(255, 255, 255, .055);
+    }
+    .quick-card strong { display: block; font-size: 22px; }
+    .quick-card span { color: var(--muted); font-size: 14px; }
+
+    section { padding: 34px 0; }
+    .section-head { margin-bottom: 22px; }
+    .section-head h2 { margin: 0 0 8px; font-size: clamp(28px, 4vw, 44px); letter-spacing: -.03em; }
+    .section-head p { margin: 0; max-width: 820px; color: var(--muted); font-size: 17px; line-height: 1.55; }
+
+    .models {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 18px;
+    }
+    .model-card {
+      position: relative;
+      overflow: hidden;
+      padding: 22px;
+      border-radius: var(--radius);
+      border: 1px solid var(--line);
+      background: linear-gradient(180deg, var(--panel), rgba(7, 11, 28, .78));
+      box-shadow: var(--shadow);
+    }
+    .model-card::before {
+      content: "";
+      position: absolute;
+      inset: 0 0 auto 0;
+      height: 4px;
+      background: linear-gradient(90deg, var(--cyan), var(--violet), var(--pink));
+      opacity: .9;
+    }
+    .model-top { display: flex; justify-content: space-between; gap: 10px; align-items: start; }
+    .model-card h3 { margin: 10px 0 6px; font-size: 23px; }
+    .code-name {
+      display: inline-flex;
+      align-items: center;
+      padding: 5px 8px;
+      border-radius: 999px;
+      color: var(--aqua);
+      background: rgba(0, 255, 204, .08);
+      border: 1px solid rgba(0, 255, 204, .2);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    .tag {
+      display: inline-flex;
+      padding: 5px 9px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+    }
+    .model-card p { color: var(--muted); line-height: 1.55; margin: 12px 0 16px; }
+    .mini-title { margin: 16px 0 8px; font-size: 13px; color: var(--text); text-transform: uppercase; letter-spacing: .08em; }
+    ul.clean { margin: 0; padding: 0; list-style: none; display: grid; gap: 7px; }
+    ul.clean li { color: var(--muted); font-size: 14px; line-height: 1.35; }
+    ul.clean li::before { content: "•"; color: var(--aqua); padding-right: 8px; }
+
+    .two-col {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 18px;
+    }
+    .panel {
+      padding: 22px;
+      border-radius: var(--radius);
+      border: 1px solid var(--line);
+      background: var(--panel2);
+      box-shadow: var(--shadow);
+    }
+    .panel h3 { margin: 0 0 12px; font-size: 22px; }
+    .panel p, .panel li { color: var(--muted); line-height: 1.55; }
+
+    .table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(255, 255, 255, .045);
+    }
+    table { width: 100%; border-collapse: collapse; min-width: 820px; }
+    th, td { padding: 14px 16px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { color: var(--text); font-size: 13px; text-transform: uppercase; letter-spacing: .08em; background: rgba(255, 255, 255, .045); }
+    td { color: var(--muted); line-height: 1.45; }
+    tr:last-child td { border-bottom: 0; }
+    code, pre {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    }
+    code { color: var(--aqua); }
+    pre {
+      margin: 0;
+      padding: 18px;
+      overflow-x: auto;
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background: rgba(0, 0, 0, .36);
+      color: #dbeafe;
+      line-height: 1.55;
+    }
+    .command-grid { display: grid; gap: 14px; }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 18px;
+    }
+    .step {
+      padding: 16px;
+      min-height: 130px;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      background: rgba(255, 255, 255, .055);
+    }
+    .step b { display: block; margin-bottom: 8px; }
+    .step span { color: var(--muted); font-size: 14px; line-height: 1.4; }
+
+    footer { padding: 46px 0; color: var(--muted); border-top: 1px solid var(--line); margin-top: 34px; }
+
+    @media (max-width: 980px) {
+      .models, .quick-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .flow { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .two-col { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 640px) {
+      nav { align-items: flex-start; flex-direction: column; padding: 16px 0; }
+      .models, .quick-grid, .flow { grid-template-columns: 1fr; }
+      .hero { padding-top: 56px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <nav class="wrap">
+      <a class="brand" href="index.html">AstroGraphAnomaly</a>
+      <div class="navlinks">
+        <a href="#modeles">Modèles</a>
+        <a href="#pipeline">Pipeline</a>
+        <a href="#seuils">Seuils</a>
+        <a href="#commandes">Commandes</a>
+        <a href="https://github.com/dalozedidier-dot/AstroGraphAnomaly" target="_blank" rel="noreferrer">GitHub</a>
+      </div>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero wrap">
+      <span class="eyebrow">Détection d’anomalies astronomiques • graphe k-NN • Gaia/CSV</span>
+      <h1>Les modèles proposés par AstroGraphAnomaly</h1>
+      <p class="lead">
+        AstroGraphAnomaly ne cherche pas à “prouver” qu’un objet est exceptionnel. Il construit un graphe à partir des sources,
+        extrait des indicateurs astronomiques et structurels, puis propose plusieurs moteurs de scoring pour repérer les candidats
+        qui méritent une vérification humaine.
+      </p>
+      <div class="hero-actions">
+        <a class="btn primary" href="#modeles">Voir les moteurs</a>
+        <a class="btn" href="#commandes">Lancer un exemple</a>
+      </div>
+
+      <div class="quick-grid" aria-label="Résumé rapide">
+        <div class="quick-card"><strong>6</strong><span>moteurs de scoring utilisables depuis la CLI</span></div>
+        <div class="quick-card"><strong>2</strong><span>modes de features : basic et extended</span></div>
+        <div class="quick-card"><strong>4</strong><span>stratégies de seuil pour choisir les anomalies</span></div>
+        <div class="quick-card"><strong>0</strong><span>label obligatoire : approche exploratoire non supervisée</span></div>
+      </div>
+    </section>
+
+    <section id="pipeline" class="wrap">
+      <div class="section-head">
+        <h2>Le chemin de lecture</h2>
+        <p>La logique du dépôt est simple : transformer un catalogue en graphe, enrichir les nœuds, scorer les sources, puis produire des fichiers lisibles et vérifiables.</p>
+      </div>
+      <div class="flow">
+        <div class="step"><b>1. Données</b><span>CSV local, Gaia DR3 via requête, ou CSV de type Hubble/HST.</span></div>
+        <div class="step"><b>2. Graphe</b><span>Construction d’un graphe k-NN sur RA/Dec, coordonnées 3D ou fallback PCA numérique.</span></div>
+        <div class="step"><b>3. Features</b><span>Attributs astro + métriques de graphe : degré, clustering, k-core, communautés, ponts.</span></div>
+        <div class="step"><b>4. Modèle</b><span>Scoring par Isolation Forest, LOF, One-Class SVM, Robust Z-Score, PineForest ou ensemble.</span></div>
+        <div class="step"><b>5. Rapport</b><span>CSV, GraphML, PNG, LIME, prompts LLM, manifest et rapport HTML autonome.</span></div>
+      </div>
+    </section>
+
+    <section id="modeles" class="wrap">
+      <div class="section-head">
+        <h2>Modèles / moteurs disponibles</h2>
+        <p>Dans le code, ils sont appelés <code>engine</code>. Le mot “modèle” est donc à comprendre comme moteur de scoring d’anomalie, pas comme preuve astrophysique finale.</p>
+      </div>
+
+      <div class="models">
+        <article class="model-card">
+          <div class="model-top"><span class="tag">Point de départ</span><span class="code-name">isolation_forest</span></div>
+          <h3>Isolation Forest</h3>
+          <p>Isole les points rares via des arbres aléatoires. Rapide, robuste et très utile pour une première passe sur un catalogue.</p>
+          <div class="mini-title">Utile pour</div>
+          <ul class="clean"><li>repérer des extrêmes multivariés</li><li>faire un tri rapide sur beaucoup de sources</li><li>obtenir une base de comparaison stable</li></ul>
+          <div class="mini-title">Limite</div>
+          <ul class="clean"><li>dépend du paramètre <code>contamination</code></li><li>ne comprend pas le sens astrophysique des anomalies</li></ul>
+        </article>
+
+        <article class="model-card">
+          <div class="model-top"><span class="tag">Densité locale</span><span class="code-name">lof</span></div>
+          <h3>Local Outlier Factor</h3>
+          <p>Compare une source à son voisinage local. Très intéressant quand les données contiennent plusieurs régions ou populations différentes.</p>
+          <div class="mini-title">Utile pour</div>
+          <ul class="clean"><li>détecter ce qui est étrange localement</li><li>éviter qu’un seul nuage global écrase les sous-structures</li><li>compléter Isolation Forest</li></ul>
+          <div class="mini-title">Limite</div>
+          <ul class="clean"><li>sensible au nombre de voisins</li><li>moins confortable sur très grands volumes sans optimisation</li></ul>
+        </article>
+
+        <article class="model-card">
+          <div class="model-top"><span class="tag">Frontière</span><span class="code-name">ocsvm</span></div>
+          <h3>One-Class SVM</h3>
+          <p>Apprend une frontière autour du comportement dominant. Pratique pour des jeux de données petits ou moyens, bien normalisés.</p>
+          <div class="mini-title">Utile pour</div>
+          <ul class="clean"><li>chercher une frontière non linéaire</li><li>tester un autre angle que les arbres ou la densité</li><li>comparer les candidats instables</li></ul>
+          <div class="mini-title">Limite</div>
+          <ul class="clean"><li>sensible à l’échelle des variables</li><li>peut devenir coûteux sur gros catalogues</li></ul>
+        </article>
+
+        <article class="model-card">
+          <div class="model-top"><span class="tag">Baseline lisible</span><span class="code-name">robust_zscore</span></div>
+          <h3>Robust Z-Score</h3>
+          <p>Score transparent basé sur des écarts robustes. C’est le meilleur garde-fou pour voir si les modèles plus complexes racontent n’importe quoi.</p>
+          <div class="mini-title">Utile pour</div>
+          <ul class="clean"><li>avoir une mesure simple et explicable</li><li>contrôler les extrêmes statistiques</li><li>servir de référence minimale</li></ul>
+          <div class="mini-title">Limite</div>
+          <ul class="clean"><li>capte mal les anomalies relationnelles complexes</li><li>ne suffit pas seul pour une exploration riche</li></ul>
+        </article>
+
+        <article class="model-card">
+          <div class="model-top"><span class="tag">Optionnel</span><span class="code-name">pineforest</span></div>
+          <h3>PineForest</h3>
+          <p>Moteur optionnel basé sur <code>coniferest</code>. Il est prévu comme piste expérimentale pour accélérer certains scorings d’anomalies.</p>
+          <div class="mini-title">Utile pour</div>
+          <ul class="clean"><li>tester une variante orientée performance</li><li>comparer avec Isolation Forest</li><li>explorer des alternatives modernes</li></ul>
+          <div class="mini-title">Limite</div>
+          <ul class="clean"><li>nécessite une dépendance non installée par défaut</li><li>à garder comme moteur expérimental</li></ul>
+        </article>
+
+        <article class="model-card">
+          <div class="model-top"><span class="tag">Recommandé</span><span class="code-name">ensemble</span></div>
+          <h3>Ensemble composite</h3>
+          <p>Combine plusieurs moteurs, normalise leurs scores et peut ajouter une contrainte issue du graphe. C’est le plus cohérent pour du tri exploratoire.</p>
+          <div class="mini-title">Utile pour</div>
+          <ul class="clean"><li>réduire la dépendance à un seul modèle</li><li>croiser score statistique et structure du graphe</li><li>prioriser les candidats à inspecter</li></ul>
+          <div class="mini-title">Limite</div>
+          <ul class="clean"><li>score composite plus difficile à interpréter seul</li><li>nécessite une documentation claire des poids</li></ul>
+        </article>
+      </div>
+    </section>
+
+    <section id="comparaison" class="wrap">
+      <div class="section-head">
+        <h2>Comparaison rapide</h2>
+        <p>La bonne pratique n’est pas de chercher “le meilleur modèle” dans l’absolu, mais de regarder quels candidats reviennent malgré plusieurs lectures différentes.</p>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Engine</th><th>Lecture dominante</th><th>Forces</th><th>À surveiller</th><th>Commande</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>isolation_forest</code></td><td>rareté multivariée globale</td><td>rapide, bon défaut, stable</td><td>contamination, extrêmes non astrophysiques</td><td><code>--engine isolation_forest</code></td></tr>
+            <tr><td><code>lof</code></td><td>écart au voisinage local</td><td>bon pour sous-populations</td><td>paramètre voisins, densités hétérogènes</td><td><code>--engine lof</code></td></tr>
+            <tr><td><code>ocsvm</code></td><td>frontière du comportement normal</td><td>non-linéaire, intéressant en comparaison</td><td>coût, échelle, réglage <code>nu</code></td><td><code>--engine ocsvm</code></td></tr>
+            <tr><td><code>robust_zscore</code></td><td>écarts robustes aux médianes</td><td>simple, lisible, bon contrôle</td><td>moins puissant sur anomalies relationnelles</td><td><code>--engine robust_zscore</code></td></tr>
+            <tr><td><code>pineforest</code></td><td>forêt optionnelle via coniferest</td><td>piste performance/expérimentation</td><td>dépendance optionnelle</td><td><code>--engine pineforest</code></td></tr>
+            <tr><td><code>ensemble</code></td><td>score composite multi-contraintes</td><td>croisement de modèles + graphe</td><td>poids à documenter</td><td><code>--engine ensemble</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="seuils" class="wrap">
+      <div class="two-col">
+        <div class="panel">
+          <h3>Modes de features</h3>
+          <ul>
+            <li><code>basic</code> : degré, clustering, parallax, mouvements propres, magnitude, distance.</li>
+            <li><code>extended</code> : ajoute k-core, betweenness, communautés, points d’articulation et ponts.</li>
+          </ul>
+          <p>Pour une page publique ou une démonstration, <code>extended</code> est plus parlant, parce qu’il montre vraiment la dimension “graphe”.</p>
+        </div>
+        <div class="panel">
+          <h3>Stratégies de seuil</h3>
+          <ul>
+            <li><code>contamination</code> : fraction attendue d’anomalies.</li>
+            <li><code>percentile</code> : coupe au-dessus d’un percentile.</li>
+            <li><code>top_k</code> : garde les K meilleurs candidats.</li>
+            <li><code>score</code> : seuil numérique direct sur <code>anomaly_score</code>.</li>
+          </ul>
+          <p>Pour communiquer clairement, <code>top_k</code> est souvent le plus lisible : “voici les 50 candidats à examiner”.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="commandes" class="wrap">
+      <div class="section-head">
+        <h2>Commandes utiles</h2>
+        <p>Ces commandes fonctionnent depuis la racine du dépôt après installation des dépendances.</p>
+      </div>
+      <div class="command-grid">
+        <pre><code># Installation
+pip install -r requirements.txt</code></pre>
+        <pre><code># Démo locale, sans réseau
+python run_workflow.py --mode csv \
+  --in-csv data/sample_gaia_like.csv \
+  --out results/demo_ensemble \
+  --engine ensemble \
+  --threshold-strategy top_k \
+  --top-k 50 \
+  --plots \
+  --explain-top 10</code></pre>
+        <pre><code># Comparer plusieurs moteurs sur le même fichier
+python run_workflow.py --mode csv --in-csv data/sample_gaia_like.csv --out results/iforest --engine isolation_forest --threshold-strategy top_k --top-k 50
+python run_workflow.py --mode csv --in-csv data/sample_gaia_like.csv --out results/lof     --engine lof              --threshold-strategy top_k --top-k 50
+python run_workflow.py --mode csv --in-csv data/sample_gaia_like.csv --out results/zscore  --engine robust_zscore    --threshold-strategy top_k --top-k 50</code></pre>
+        <pre><code># Ensemble pondéré : on donne plus de poids à la contrainte de graphe
+python run_workflow.py --mode csv \
+  --in-csv data/sample_gaia_like.csv \
+  --out results/ensemble_graph \
+  --engine ensemble \
+  --ensemble-engines isolation_forest,lof,ocsvm,robust_zscore \
+  --ensemble-weights isolation_forest=1,lof=1,ocsvm=1,robust_zscore=.7,graph=1.8 \
+  --threshold-strategy top_k \
+  --top-k 50</code></pre>
+      </div>
+    </section>
+
+    <section class="wrap">
+      <div class="panel">
+        <h3>Phrase de prudence à garder visible</h3>
+        <p>
+          Un score d’anomalie n’est pas une découverte astrophysique. C’est un signal de triage : il indique qu’une source mérite une inspection,
+          une comparaison multi-modèles, puis une validation par données externes et expertise métier.
+        </p>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap">
+      <strong>AstroGraphAnomaly</strong><br />
+      Page statique prête pour GitHub Pages. Fichier : <code>models.html</code>.
+    </div>
+  </footer>
+</body>
+</html>
