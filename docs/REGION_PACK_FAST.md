@@ -18,15 +18,16 @@ Contraintes
 python tools/region_pack_fast.py   --kind galaxy_candidates   --inputs data/region_pack/raw/GalaxyCandidates_*.csv.gz   --out results/region_pack_fast/galaxy_candidates   --engine robust_zscore   --top-k 200   --max-rows 0
 ```
 
-### Smoke CI
+### Smoke (local / CI)
 
-Le workflow GitHub Actions `region_pack_fast_smoke.yml` exécute :
+Le smoke rapide s'exécute directement via le script (et est couvert par
+`tests/test_region_pack_fast.py`) :
 
 ```bash
 python tools/ci_region_pack_fast_smoke.py --max-rows 6000 --top-k 120
 ```
 
-Les artefacts sont uploadés dans `results/region_pack_fast_ci/`.
+Les artefacts sont écrits dans `results/region_pack_fast_ci/`.
 
 ## Sorties
 
