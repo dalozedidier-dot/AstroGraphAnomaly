@@ -1,0 +1,140 @@
+name: deploy_pages_from_workflow_outputs
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "run_workflow.py"
+      - "src/**"
+      - "tools/**"
+      - "data/sample_gaia_like.csv"
+      - "requirements*.txt"
+      - ".github/workflows/*.yml"
+      - ".github/workflows/*.yaml"
+  workflow_dispatch:
+    inputs:
+      run_name:
+        description: "Nom du run publié dans GitHub Pages"
+        required: true
+        default: "pages_demo"
+      engine:
+        description: "Moteur publié (isolation_forest, lof, ocsvm, robust_zscore, pineforest, ensemble)"
+        required: true
+        default: "ensemble"
+      threshold_strategy:
+        description: "Stratégie seuil (contamination, percentile, top_k, score)"
+        required: true
+        default: "top_k"
+      top_k:
+        description: "Nombre d'anomalies exportées"
+        required: true
+        default: "20"
+      explain_top:
+        description: "Nombre d'anomalies expliquées"
+        required: true
+        default: "5"
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build_and_deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    env:
+      MPLBACKEND: Agg
+      PYTHONHASHSEED: "0"
+      RUN_NAME_INPUT: ${{ github.event.inputs.run_name }}
+      ENGINE_INPUT: ${{ github.event.inputs.engine }}
+      THRESHOLD_INPUT: ${{ github.event.inputs.threshold_strategy }}
+      TOP_K_INPUT: ${{ github.event.inputs.top_k }}
+      EXPLAIN_TOP_INPUT: ${{ github.event.inputs.explain_top }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          if [ -f requirements_viz.txt ]; then python -m pip install -r requirements_viz.txt; fi
+          if [ -f pyproject.toml ]; then python -m pip install -e .; fi
+
+      - name: Resolve run parameters
+        id: params
+        run: |
+          set -euo pipefail
+          RUN_NAME="${RUN_NAME_INPUT:-pages_demo}"
+          ENGINE="${ENGINE_INPUT:-ensemble}"
+          THRESHOLD="${THRESHOLD_INPUT:-top_k}"
+          TOP_K="${TOP_K_INPUT:-20}"
+          EXPLAIN_TOP="${EXPLAIN_TOP_INPUT:-5}"
+
+          echo "run_name=${RUN_NAME}" >> "$GITHUB_OUTPUT"
+          echo "engine=${ENGINE}" >> "$GITHUB_OUTPUT"
+          echo "threshold=${THRESHOLD}" >> "$GITHUB_OUTPUT"
+          echo "top_k=${TOP_K}" >> "$GITHUB_OUTPUT"
+          echo "explain_top=${EXPLAIN_TOP}" >> "$GITHUB_OUTPUT"
+
+      - name: Run AstroGraphAnomaly pipeline for Pages
+        run: |
+          set -euo pipefail
+          OUT_DIR="results/${{ steps.params.outputs.run_name }}"
+          mkdir -p "${OUT_DIR}"
+
+          python run_workflow.py \
+            --mode csv \
+            --in-csv data/sample_gaia_like.csv \
+            --out "${OUT_DIR}" \
+            --engine "${{ steps.params.outputs.engine }}" \
+            --threshold-strategy "${{ steps.params.outputs.threshold }}" \
+            --top-k "${{ steps.params.outputs.top_k }}" \
+            --knn-k 8 \
+            --features-mode extended \
+            --plots \
+            --explain-top "${{ steps.params.outputs.explain_top }}" \
+            --seed 42
+
+      - name: Generate interactive 3D web views
+        run: |
+          set -euo pipefail
+          OUT_DIR="results/${{ steps.params.outputs.run_name }}"
+          python tools/plotly_3d_report.py --run-dir "${OUT_DIR}"
+          python tools/graph_viz.py --run-dir "${OUT_DIR}" --backend plotly --dim 3 --graph topk --max-nodes 400
+
+      - name: Build static site from workflow outputs
+        run: |
+          set -euo pipefail
+          python tools/build_pages_site.py \
+            --run-dir "results/${{ steps.params.outputs.run_name }}" \
+            --run-name "${{ steps.params.outputs.run_name }}" \
+            --out _site
+          echo "Published site files:"
+          find _site -maxdepth 4 -type f | sort
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

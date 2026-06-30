@@ -134,7 +134,10 @@ def hover_text(df: pd.DataFrame) -> List[str]:
 
 
 def write_html(fig: "go.Figure", out_html: Path) -> None:
-    out_html.write_text(fig.to_html(full_html=True, include_plotlyjs="cdn"), encoding="utf-8")
+    # Embed plotly.js directly in each HTML file.
+    # This is heavier than CDN mode, but it is much more reliable on GitHub Pages,
+    # in downloaded GitHub Actions artifacts, and in networks that block cdn.plot.ly.
+    out_html.write_text(fig.to_html(full_html=True, include_plotlyjs=True), encoding="utf-8")
 
 
 def apply_3d_layout(fig: "go.Figure", title: str, style: str, height: int) -> None:
