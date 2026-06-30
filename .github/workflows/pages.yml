@@ -113,6 +113,13 @@ jobs:
             --explain-top "${{ steps.params.outputs.explain_top }}" \
             --seed 42
 
+      - name: Generate interactive 3D web views
+        run: |
+          set -euo pipefail
+          OUT_DIR="results/${{ steps.params.outputs.run_name }}"
+          python tools/plotly_3d_report.py --run-dir "${OUT_DIR}"
+          python tools/graph_viz.py --run-dir "${OUT_DIR}" --backend plotly --dim 3 --graph topk --max-nodes 400
+
       - name: Build static site from workflow outputs
         run: |
           set -euo pipefail
@@ -120,6 +127,8 @@ jobs:
             --run-dir "results/${{ steps.params.outputs.run_name }}" \
             --run-name "${{ steps.params.outputs.run_name }}" \
             --out _site
+          echo "Published site files:"
+          find _site -maxdepth 4 -type f | sort
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

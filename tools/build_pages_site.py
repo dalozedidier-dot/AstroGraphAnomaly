@@ -242,13 +242,26 @@ def collect_artifacts(run_dir: Path, site_run_dir: str) -> List[Dict[str, str]]:
     for label, rel, desc in important:
         path = run_dir / rel
         if path.exists():
-            rows.append({"label": label, "href": f"{site_run_dir}/{rel}", "desc": desc, "size": file_size(path)})
+            rows.append({"kind": "core", "label": label, "href": f"{site_run_dir}/{rel}", "desc": desc, "size": file_size(path)})
+
+    interactive_dirs = [
+        ("Vues 3D Plotly", "viz_plotly_3d", "Vue HTML interactive produite par tools/plotly_3d_report.py."),
+        ("Explorer graphe", "viz_graph_force", "Vue HTML interactive produite par tools/graph_viz.py."),
+    ]
+    for prefix, rel_dir, desc in interactive_dirs:
+        root = run_dir / rel_dir
+        if not root.exists():
+            continue
+        for p in sorted(root.glob("*.html")):
+            rel = p.relative_to(run_dir).as_posix()
+            name = p.stem.replace("_", " ").replace("dim3", "3D").replace("dim2", "2D")
+            rows.append({"kind": "interactive_html", "label": f"{prefix}: {name}", "href": f"{site_run_dir}/{rel}", "desc": desc, "size": file_size(p)})
+
     plots = run_dir / "plots"
     if plots.exists():
         for p in sorted(plots.glob("*.png"))[:12]:
-            rows.append({"label": f"Plot: {p.stem}", "href": f"{site_run_dir}/plots/{p.name}", "desc": "Image produite par le workflow.", "size": file_size(p)})
+            rows.append({"kind": "plot", "label": f"Plot: {p.stem}", "href": f"{site_run_dir}/plots/{p.name}", "desc": "Image produite par le workflow.", "size": file_size(p)})
     return rows
-
 
 def copy_run(run_dir: Path, out_dir: Path, run_name: str) -> str:
     site_run_rel = f"runs/{run_name}"
@@ -349,6 +362,13 @@ def build_index(
             plot_imgs.append(f"<a href=\"{h(a['href'])}\"><img src=\"{h(a['href'])}\" alt=\"{h(a['label'])}\"></a>")
     plot_grid = "".join(plot_imgs[:6]) or "<p class=\"muted\">Les plots apparaîtront ici après un run avec <code>--plots</code>.</p>"
 
+    interactive_views = [a for a in artifacts if a.get("kind") == "interactive_html"]
+    interactive_html = "".join(
+        f"<div class=\"artifact\"><strong><a href=\"{h(a['href'])}\">{h(a['label'])}</a></strong>"
+        f"<span class=\"muted small\">{h(a['desc'])}</span><br><span class=\"pill\">{h(a['size'])}</span></div>"
+        for a in interactive_views
+    ) or "<p class=\"muted\">Aucune vue 3D interactive détectée. Le workflow doit lancer <code>tools/plotly_3d_report.py</code> et/ou <code>tools/graph_viz.py --dim 3</code>.</p>"
+
     top_table = ""
     if top_rows:
         cols = [c for c in ["source_id", "anomaly_score", "incoherence_score", "anomaly_label", "ra", "dec", "parallax", "phot_g_mean_mag", "bp_rp", "ruwe"] if c in top_rows[0]]
@@ -401,6 +421,12 @@ def build_index(
     </article>
 
     <article class=\"card full\">
+      <h2>Vues 3D interactives ouvrables en ligne</h2>
+      <p class=\"muted\">Ces pages sont générées par le workflow après le run : nuage d’étoiles 3D, sphère céleste, graphe top-k et explorer de graphe. Les HTML embarquent Plotly pour éviter qu’un blocage CDN empêche l’ouverture sur GitHub Pages.</p>
+      <div class=\"artifact-list\">{interactive_html}</div>
+    </article>
+
+    <article class=\"card full\">
       <h2>Artefacts réellement produits</h2>
       <div class=\"artifact-list\">{artifact_html}</div>
     </article>
@@ -434,7 +460,10 @@ def build_index(
   --engine {h(engine or 'ensemble')} \\
   --threshold-strategy {h(threshold.get('strategy','top_k'))} \\
   --top-k {h(threshold.get('top_k','20'))} \\
-  --knn-k 8 --features-mode extended --plots --explain-top 5</code></pre>
+  --knn-k 8 --features-mode extended --plots --explain-top 5
+
+python tools/plotly_3d_report.py --run-dir results/{h(run_name)}
+python tools/graph_viz.py --run-dir results/{h(run_name)} --backend plotly --dim 3 --graph topk --max-nodes 400</code></pre>
     </article>
   </section>
 
@@ -509,6 +538,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         ),
     )
     write(out_dir / "workflows.html", build_workflow_page(workflows, repo))
+    write(out_dir / ".nojekyll", "")
 
     meta = {
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
