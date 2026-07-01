@@ -282,8 +282,148 @@ def write(path: Path, content: str) -> None:
 
 def base_css() -> str:
     return """
-:root{--bg:#050716;--panel:#0d1329;--panel2:#111936;--line:#263253;--text:#eef3ff;--muted:#aab6d8;--accent:#6ee7ff;--accent2:#c084fc;--warn:#ffd166;--ok:#7ee787}*{box-sizing:border-box}body{margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:radial-gradient(circle at 20% 0%,#18204a 0,#050716 38%),linear-gradient(160deg,#050716,#091126);color:var(--text);line-height:1.55}.wrap{width:min(1180px,92vw);margin:auto}.hero{padding:72px 0 36px}.eyebrow{color:var(--accent);font-weight:700;letter-spacing:.14em;text-transform:uppercase;font-size:.8rem}.hero h1{font-size:clamp(2rem,5vw,4.8rem);line-height:.95;margin:.25em 0}.lead{font-size:clamp(1.05rem,2vw,1.35rem);max-width:850px;color:var(--muted)}.grid{display:grid;grid-template-columns:repeat(12,1fr);gap:18px}.card{grid-column:span 4;background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.025));border:1px solid var(--line);border-radius:22px;padding:20px;box-shadow:0 16px 40px rgba(0,0,0,.25)}.wide{grid-column:span 8}.full{grid-column:1/-1}.card h2,.card h3{margin-top:0}.muted{color:var(--muted)}.pill{display:inline-flex;gap:6px;align-items:center;padding:5px 10px;border:1px solid var(--line);border-radius:999px;background:rgba(255,255,255,.04);color:var(--muted);font-size:.88rem;margin:2px 4px 2px 0}.stat{font-size:2rem;font-weight:800;color:var(--accent)}a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:16px}table{width:100%;border-collapse:collapse;min-width:760px}th,td{text-align:left;padding:11px 13px;border-bottom:1px solid rgba(255,255,255,.08);vertical-align:top}th{color:#dce7ff;background:rgba(255,255,255,.06)}td{color:var(--muted)}code,pre{background:#080d1d;border:1px solid var(--line);border-radius:10px;color:#dbeafe}code{padding:2px 6px}pre{padding:14px;overflow:auto}.flow{display:flex;flex-wrap:wrap;gap:8px;align-items:center}.arrow{color:var(--accent2);font-weight:900}.footer{padding:48px 0;color:var(--muted)}.artifact-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px}.artifact{border:1px solid var(--line);background:rgba(255,255,255,.04);border-radius:16px;padding:14px}.artifact strong{display:block;color:var(--text)}.plot-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}.plot-grid img{width:100%;height:auto;border:1px solid var(--line);border-radius:16px;background:#fff}.small{font-size:.9rem}@media(max-width:900px){.card,.wide{grid-column:1/-1}.hero{padding-top:42px}}
+:root{
+  --bg:#05060a;--deep:#0a0a1f;--panel:rgba(18,20,42,.55);--panel-solid:#0c0d1d;
+  --line:rgba(120,140,200,.18);--text:#e8e8ff;--muted:#9aa0c0;--dim:#5a6090;
+  --blue:#00d4ff;--cyan:#00ffcc;--pink:#ff3b6b;--orange:#ff8a3d;--accent:var(--cyan);
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;font-family:'Rajdhani',ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+  background:var(--bg);color:var(--text);line-height:1.6;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+::selection{background:rgba(255,59,107,.35);color:#fff}
+
+/* cosmic backdrop */
+.sky{position:fixed;inset:0;z-index:-2;
+  background:
+    radial-gradient(1200px 700px at 80% -10%,rgba(0,212,255,.10),transparent 60%),
+    radial-gradient(1000px 800px at 10% 110%,rgba(255,59,107,.10),transparent 60%),
+    radial-gradient(ellipse at center,#0b0a22 0%,#05060a 70%)}
+.sky::before,.sky::after{content:"";position:absolute;inset:-50%;
+  background-image:
+    radial-gradient(1.4px 1.4px at 20% 30%,#fff,transparent),
+    radial-gradient(1.2px 1.2px at 70% 60%,#cfe6ff,transparent),
+    radial-gradient(1px 1px at 40% 80%,#fff,transparent),
+    radial-gradient(1.6px 1.6px at 85% 25%,#b9d4ff,transparent),
+    radial-gradient(1px 1px at 55% 15%,#fff,transparent),
+    radial-gradient(1.3px 1.3px at 33% 55%,#fff,transparent);
+  background-size:480px 480px;opacity:.5;animation:drift 140s linear infinite}
+.sky::after{background-size:720px 720px;opacity:.28;animation-duration:240s}
+@keyframes drift{to{transform:translate3d(-480px,-480px,0)}}
+
+.wrap{width:min(1180px,92vw);margin:auto}
+a{color:var(--blue);text-decoration:none}a:hover{color:var(--cyan)}
+h1,h2,h3{font-family:'Orbitron',sans-serif;font-weight:700;letter-spacing:.5px}
+
+/* top brand bar */
+.brand-bar{position:sticky;top:0;z-index:50;display:flex;align-items:center;justify-content:space-between;
+  gap:16px;padding:14px clamp(16px,4vw,40px);background:rgba(5,6,10,.6);
+  backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border-bottom:1px solid var(--line)}
+.brand{font-family:'Orbitron',sans-serif;font-weight:800;letter-spacing:2px;font-size:1rem;
+  background:linear-gradient(90deg,var(--blue),var(--cyan));-webkit-background-clip:text;background-clip:text;color:transparent}
+.brand b{color:var(--pink);-webkit-text-fill-color:var(--pink)}
+.brand-bar nav{display:flex;gap:6px;flex-wrap:wrap}
+.brand-bar nav a{color:var(--muted);font-weight:600;font-size:.92rem;padding:7px 12px;border-radius:9px}
+.brand-bar nav a:hover{color:var(--text);background:rgba(255,255,255,.05)}
+
+/* hero */
+.hero{padding:64px 0 30px}
+.hero-grid{display:grid;grid-template-columns:1.15fr .85fr;gap:40px;align-items:center}
+.eyebrow{display:inline-flex;align-items:center;gap:8px;color:var(--cyan);font-family:'Space Mono',monospace;
+  font-weight:700;letter-spacing:.16em;text-transform:uppercase;font-size:.74rem;
+  border:1px solid var(--line);border-radius:999px;padding:6px 13px;background:rgba(0,255,204,.06)}
+.eyebrow .diamond{width:8px;height:8px;background:var(--pink);transform:rotate(45deg);box-shadow:0 0 10px var(--pink)}
+.hero h1{font-size:clamp(2rem,5vw,3.9rem);line-height:1.02;margin:.4em 0 .2em;
+  background:linear-gradient(120deg,#fff 0%,var(--blue) 45%,var(--pink) 100%);
+  -webkit-background-clip:text;background-clip:text;color:transparent}
+.lead{font-size:clamp(1.02rem,2vw,1.25rem);max-width:60ch;color:var(--muted)}
+.cta{display:flex;flex-wrap:wrap;gap:12px;margin-top:24px}
+.btn{display:inline-flex;align-items:center;gap:9px;font-weight:700;font-size:.96rem;padding:11px 20px;
+  border-radius:11px;cursor:pointer;transition:transform .15s,box-shadow .2s,border-color .2s}
+.btn-primary{color:#04121a;background:linear-gradient(135deg,var(--cyan),var(--blue));box-shadow:0 10px 30px rgba(0,212,255,.25)}
+.btn-primary:hover{transform:translateY(-2px);box-shadow:0 16px 40px rgba(0,212,255,.4)}
+.btn-ghost{color:var(--text);border:1px solid var(--line);background:rgba(255,255,255,.03)}
+.btn-ghost:hover{transform:translateY(-2px);border-color:var(--pink)}
+
+/* hero art (k-NN constellation, theme anchor) */
+.hero-art{width:100%;max-width:420px;justify-self:center;aspect-ratio:1}
+.hero-art svg{width:100%;height:100%;overflow:visible}
+.edge{stroke:rgba(0,212,255,.28);stroke-width:1.2}
+.node{fill:#cfe6ff}.node.hub{fill:var(--cyan)}
+.node.anom{fill:var(--pink);filter:drop-shadow(0 0 8px var(--pink))}
+.pulse{transform-box:fill-box;transform-origin:center;animation:pulse 2.6s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:.5;r:6}50%{opacity:1;r:11}}
+.ring{fill:none;stroke:var(--pink);stroke-width:1;transform-box:fill-box;transform-origin:center;animation:ring 2.6s ease-out infinite}
+@keyframes ring{0%{r:8;opacity:.6}100%{r:34;opacity:0}}
+
+/* grid + cards */
+.grid{display:grid;grid-template-columns:repeat(12,1fr);gap:18px}
+.card{grid-column:span 4;background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:22px;
+  backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);position:relative;overflow:hidden;
+  transition:transform .2s,border-color .25s,box-shadow .25s}
+.card::before{content:"";position:absolute;inset:0 0 auto 0;height:3px;background:var(--accent);opacity:.85}
+.card:hover{transform:translateY(-4px);border-color:var(--accent);box-shadow:0 20px 50px rgba(0,0,0,.45)}
+.card.k-pink::before{background:var(--pink)}.card.k-blue::before{background:var(--blue)}.card.k-orange::before{background:var(--orange)}
+.wide{grid-column:span 8}.full{grid-column:1/-1}
+.card h2,.card h3{margin-top:0}
+.muted{color:var(--muted)}.small{font-size:.9rem}
+
+.pill{display:inline-flex;gap:6px;align-items:center;padding:5px 11px;border:1px solid var(--line);
+  border-radius:999px;background:rgba(255,255,255,.05);color:var(--text);font-size:.84rem;font-weight:600;margin:2px 4px 2px 0}
+.stat{font-family:'Orbitron',sans-serif;font-size:2.1rem;font-weight:800;
+  background:linear-gradient(120deg,var(--cyan),var(--blue));-webkit-background-clip:text;background-clip:text;color:transparent}
+
+.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:14px}
+table{width:100%;border-collapse:collapse;min-width:760px}
+th,td{text-align:left;padding:11px 13px;border-bottom:1px solid rgba(255,255,255,.07);vertical-align:top}
+th{color:#dce7ff;background:rgba(255,255,255,.05);font-family:'Space Mono',monospace;font-size:.82rem;
+  text-transform:uppercase;letter-spacing:.04em;position:sticky;top:0}
+td{color:var(--muted)}
+tbody tr:hover td{background:rgba(0,212,255,.04);color:var(--text)}
+
+code,pre{font-family:'Space Mono',ui-monospace,Menlo,Consolas,monospace;background:#06070f;border:1px solid var(--line);border-radius:10px;color:#d6dbf5}
+code{padding:2px 6px;font-size:.86em}pre{padding:16px;overflow:auto;line-height:1.7}
+
+.flow{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.arrow{color:var(--pink);font-weight:900}
+
+.artifact-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px}
+.artifact{border:1px solid var(--line);background:rgba(255,255,255,.04);border-radius:14px;padding:14px;
+  transition:transform .15s,border-color .2s}
+.artifact:hover{transform:translateY(-3px);border-color:var(--cyan)}
+.artifact strong{display:block;color:var(--text);margin-bottom:4px}
+
+.plot-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}
+.plot-grid a{border:1px solid var(--line);border-radius:14px;overflow:hidden;background:#fff;display:block;transition:transform .15s,border-color .2s}
+.plot-grid a:hover{transform:translateY(-3px);border-color:var(--pink)}
+.plot-grid img{width:100%;height:auto;display:block}
+
+.footer{padding:48px 0;color:var(--dim);border-top:1px solid var(--line);margin-top:36px}
+
+@media(max-width:900px){.hero-grid{grid-template-columns:1fr;gap:24px}.hero-art{order:-1;max-width:300px}.card,.wide{grid-column:1/-1}.hero{padding-top:36px}}
+@media(prefers-reduced-motion:reduce){.sky::before,.sky::after,.pulse,.ring{animation:none!important}}
 """.strip()
+
+
+# Reusable k-NN constellation motif (theme anchor: a highlighted anomaly node).
+HERO_ART = """
+<div class="hero-art" aria-hidden="true"><svg viewBox="0 0 400 400">
+  <g>
+    <line class="edge" x1="200" y1="200" x2="90" y2="110"/><line class="edge" x1="200" y1="200" x2="310" y2="120"/>
+    <line class="edge" x1="200" y1="200" x2="120" y2="300"/><line class="edge" x1="200" y1="200" x2="300" y2="300"/>
+    <line class="edge" x1="90" y1="110" x2="160" y2="60"/><line class="edge" x1="310" y1="120" x2="350" y2="200"/>
+    <line class="edge" x1="120" y1="300" x2="70" y2="230"/><line class="edge" x1="300" y1="300" x2="340" y2="250"/>
+    <line class="edge" x1="90" y1="110" x2="120" y2="300"/><line class="edge" x1="310" y1="120" x2="300" y2="300"/>
+  </g>
+  <g>
+    <circle class="node hub" cx="200" cy="200" r="9"/><circle class="node" cx="90" cy="110" r="6"/>
+    <circle class="node" cx="160" cy="60" r="5"/><circle class="node" cx="350" cy="200" r="5"/>
+    <circle class="node" cx="120" cy="300" r="6"/><circle class="node" cx="70" cy="230" r="5"/>
+    <circle class="node" cx="300" cy="300" r="6"/><circle class="node" cx="340" cy="250" r="5"/>
+    <circle class="ring" cx="310" cy="120" r="8"/><circle class="node anom pulse" cx="310" cy="120" r="7"/>
+  </g>
+</svg></div>
+"""
 
 
 def layout(title: str, body: str) -> str:
@@ -292,10 +432,23 @@ def layout(title: str, body: str) -> str:
 <head>
   <meta charset=\"utf-8\">
   <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
+  <meta name=\"theme-color\" content=\"#05060a\">
   <title>{h(title)}</title>
+  <link rel=\"preconnect\" href=\"https://fonts.googleapis.com\">
+  <link rel=\"preconnect\" href=\"https://fonts.gstatic.com\" crossorigin>
+  <link href=\"https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Rajdhani:wght@300;400;500;600;700&family=Space+Mono:wght@400;700&display=swap\" rel=\"stylesheet\">
   <style>{base_css()}</style>
 </head>
 <body>
+  <div class=\"sky\"></div>
+  <header class=\"brand-bar\">
+    <a class=\"brand\" href=\"index.html\">ASTRO<b>·</b>GRAPH<b>·</b>ANOMALY</a>
+    <nav>
+      <a href=\"index.html\">Dashboard</a>
+      <a href=\"workflows.html\">Workflows</a>
+      <a href=\"https://github.com/dalozedidier-dot/AstroGraphAnomaly\" target=\"_blank\" rel=\"noopener\">GitHub</a>
+    </nav>
+  </header>
 {body}
 </body>
 </html>
@@ -386,10 +539,21 @@ def build_index(
     body = f"""
 <div class=\"wrap\">
   <section class=\"hero\">
-    <div class=\"eyebrow\">AstroGraphAnomaly · workflow-first</div>
-    <h1>Page générée par les workflows, pas une vitrine séparée.</h1>
-    <p class=\"lead\">Ce site est construit depuis les fichiers <code>.github/workflows</code> et depuis un vrai dossier <code>results/{h(run_name)}</code> produit par <code>run_workflow.py</code>. Il expose donc le contrat réel : données → graphe kNN → features → moteur → seuil → artefacts.</p>
-    <p class=\"muted small\">Généré le {h(generated)} · {run_link}</p>
+    <div class=\"hero-grid\">
+      <div>
+        <span class=\"eyebrow\"><span class=\"diamond\"></span> AstroGraphAnomaly · workflow-first</span>
+        <h1>Détection d'anomalies stellaires, publiée depuis les workflows.</h1>
+        <p class=\"lead\">Ce site est construit depuis les fichiers <code>.github/workflows</code> et depuis un vrai dossier <code>results/{h(run_name)}</code> produit par <code>run_workflow.py</code> : données → graphe <em>k</em>-NN → features → moteur → seuil → artefacts.</p>
+        <div class=\"cta\">
+          <a class=\"btn btn-primary\" href=\"{h(report_link)}\">Ouvrir le rapport
+            <svg width=\"17\" height=\"17\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.5\"><path d=\"M5 12h14M13 6l6 6-6 6\"/></svg>
+          </a>
+          <a class=\"btn btn-ghost\" href=\"https://github.com/dalozedidier-dot/AstroGraphAnomaly\" target=\"_blank\" rel=\"noopener\">GitHub</a>
+        </div>
+        <p class=\"muted small\" style=\"margin-top:18px\">Généré le {h(generated)} · {run_link}</p>
+      </div>
+      {HERO_ART}
+    </div>
   </section>
 
   <section class=\"grid\">
@@ -404,9 +568,9 @@ def build_index(
       </div>
     </article>
 
-    <article class=\"card\"><h3>Lignes analysées</h3><div class=\"stat\">{h(counts.get('n_rows','—'))}</div><p class=\"muted\">sources dans le run publié</p></article>
-    <article class=\"card\"><h3>Anomalies top-k</h3><div class=\"stat\">{h(counts.get('n_anomalies','—'))}</div><p class=\"muted\">candidats exportés</p></article>
-    <article class=\"card\"><h3>Graphe</h3><div class=\"stat\">{h(counts.get('n_edges','—'))}</div><p class=\"muted\">arêtes kNN</p></article>
+    <article class=\"card k-blue\"><h3>Lignes analysées</h3><div class=\"stat\">{h(counts.get('n_rows','—'))}</div><p class=\"muted\">sources dans le run publié</p></article>
+    <article class=\"card k-pink\"><h3>Anomalies top-k</h3><div class=\"stat\">{h(counts.get('n_anomalies','—'))}</div><p class=\"muted\">candidats exportés</p></article>
+    <article class=\"card k-orange\"><h3>Graphe</h3><div class=\"stat\">{h(counts.get('n_edges','—'))}</div><p class=\"muted\">arêtes kNN</p></article>
 
     <article class=\"card wide\">
       <h2>Dernier run publié</h2>
