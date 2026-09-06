@@ -25,6 +25,10 @@ dependencies = [
 gaia = ["astroquery>=0.4.6"]
 hubble = ["astroquery>=0.4.6"]
 pineforest = ["coniferest>=0.4.0"]
+dev = [
+  "pytest>=8.0",
+  "astroquery>=0.4.6",
+]
 
 [project.scripts]
 aga = "astrographanomaly.cli:main"
@@ -34,3 +38,4 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+include = ["astrographanomaly*"]
