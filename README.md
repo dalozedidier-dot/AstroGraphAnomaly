@@ -1,7 +1,12 @@
 # AstroGraphAnomaly
 
 [![ci](https://github.com/dalozedidier-dot/AstroGraphAnomaly/actions/workflows/ci.yml/badge.svg)](https://github.com/dalozedidier-dot/AstroGraphAnomaly/actions/workflows/ci.yml)
+[![Pages](https://img.shields.io/badge/GitHub%20Pages-live-2ea44f)](https://dalozedidier-dot.github.io/AstroGraphAnomaly/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+**Démo en ligne (rien à télécharger) :** [dalozedidier-dot.github.io/AstroGraphAnomaly](https://dalozedidier-dot.github.io/AstroGraphAnomaly/)
+
+Sur cette page : rapport du run, plots, table des top anomalies, vues 3D Plotly (nuage, sphère céleste, graphe) ouvrables dans le navigateur.
 
 Dépôt orienté **workflow** (GitHub web + Colab) :
 - ingestion **Gaia** ou **CSV**
@@ -35,6 +40,12 @@ python run_workflow.py --mode gaia --ra 266.4051 --dec -28.936175 --radius-deg 0
 ```bash
 pip install -e ".[dev]"
 aga csv --in-csv data/sample_gaia_like.csv --out results/run_csv --plots --explain-top 10
+```
+
+Après un run local, vues 3D dans le navigateur :
+```bash
+python tools/plotly_3d_report.py --run-dir results/run_csv
+# ouvre results/run_csv/viz_plotly_3d/index.html
 ```
 
 ## Résultats
@@ -74,3 +85,5 @@ Chaque run produit :
 pip install -e ".[dev]"
 pytest -q
 ```
+
+Pages : voir [docs/GITHUB_PAGES.md](docs/GITHUB_PAGES.md).

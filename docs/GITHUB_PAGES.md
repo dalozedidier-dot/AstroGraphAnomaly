@@ -1,67 +1,30 @@
-# Publier la page web sur GitHub Pages
+# GitHub Pages — tout voir sans télécharger
 
-Le dépôt contient une page statique prête à publier :
+Site public (déjà déployé) :
 
-- `index.html` : page d’accueil actuelle du toolkit.
-- `models.html` : page dédiée aux modèles / engines AstroGraphAnomaly.
-- `docs/MODELS.md` : version documentation Markdown.
-- `.github/workflows/pages.yml` : workflow de déploiement automatique GitHub Pages.
+**https://dalozedidier-dot.github.io/AstroGraphAnomaly/**
 
-## Méthode recommandée : GitHub Actions
+Ce n’est pas une copie du dépôt. Le workflow `deploy_pages_from_workflow_outputs` (`.github/workflows/pages.yml`) :
 
-1. Pousser les fichiers sur GitHub.
-2. Aller dans **Settings → Pages**.
-3. Dans **Build and deployment**, choisir **Source → GitHub Actions**.
-4. Le workflow `deploy_pages` publiera automatiquement le site.
+1. lance `run_workflow.py` sur `data/sample_gaia_like.csv`
+2. génère les vues 3D (`tools/plotly_3d_report.py`, `tools/graph_viz.py`)
+3. assemble un site statique avec `tools/build_pages_site.py`
+4. déploie `_site/` sur GitHub Pages
 
-La page sera ensuite accessible via :
+## Ce qui s’ouvre dans le navigateur
 
-```text
-https://<utilisateur>.github.io/<nom-du-repo>/models.html
-```
+| Page | URL |
+| --- | --- |
+| Tableau de bord | https://dalozedidier-dot.github.io/AstroGraphAnomaly/ |
+| Rapport HTML du run | https://dalozedidier-dot.github.io/AstroGraphAnomaly/runs/pages_demo/report.html |
+| Index des vues 3D | dans le dashboard, section *Vues 3D interactives* |
 
-## Quand le workflow se lance
+Plotly est **embarqué** dans les HTML : pas de CDN, pas de zip Actions à télécharger.
 
-Le workflow se déclenche automatiquement quand un de ces éléments change sur `main` :
+## Relancer une publication
 
-- `index.html`
-- `models.html`
-- `docs/**`
-- `README.md`
-- `LICENSE`
-- `.github/workflows/pages.yml`
+Actions → **deploy_pages_from_workflow_outputs** → Run workflow.
 
-Il peut aussi être lancé manuellement depuis **Actions → deploy_pages → Run workflow**.
+Ou pousser sur `main` un changement dans `src/`, `tools/`, `run_workflow.py`, `data/sample_gaia_like.csv` ou les workflows.
 
-## Ce que publie le workflow
-
-Le workflow prépare un dossier `_site` contenant uniquement les fichiers utiles à la page publique :
-
-```text
-_site/
-├── index.html
-├── models.html
-├── README.md
-├── LICENSE
-├── docs/
-└── .nojekyll
-```
-
-Cela évite de publier inutilement tout le dépôt Python, les scripts, les notebooks ou les fichiers de test.
-
-## Alternative simple
-
-Il est aussi possible d’utiliser la méthode classique :
-
-1. Aller dans **Settings → Pages**.
-2. Choisir **Deploy from a branch**.
-3. Choisir la branche `main` puis `/root`.
-
-Mais pour ce dépôt, la méthode **GitHub Actions** est plus propre, car elle sépare la page publique du code scientifique.
-
-## À vérifier
-
-- Le fichier `index.html` est bien à la racine du dépôt.
-- Le fichier `models.html` est bien à la racine du dépôt.
-- Dans **Settings → Pages**, la source est bien réglée sur **GitHub Actions**.
-- Le dépôt est public, ou GitHub Pages est autorisé pour le dépôt privé selon ton plan GitHub.
+Settings → Pages → Source = **GitHub Actions** (pas « Deploy from a branch »).
