@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68.0"]
+requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -17,17 +17,49 @@ dependencies = [
   "networkx>=3.1",
   "matplotlib>=3.7",
   "pyyaml>=6.0",
-  "astropy>=5.3",
-  "lime>=0.2.0.1",
 ]
 
 [project.optional-dependencies]
-gaia = ["astroquery>=0.4.6"]
-hubble = ["astroquery>=0.4.6"]
-pineforest = ["coniferest>=0.4.0"]
+gaia = [
+  "astroquery>=0.4.6",
+  "astropy>=5.3",
+]
+hubble = [
+  "astroquery>=0.4.6",
+  "astropy>=5.3",
+]
+explain = [
+  "lime>=0.2.0.1",
+]
+pineforest = [
+  "coniferest>=0.4.0",
+]
+viz = [
+  "plotly>=5.22.0",
+  "pyvis>=0.3.2",
+  "pillow",
+  "imageio>=2.20",
+  "umap-learn>=0.5.5",
+  "scipy",
+]
 dev = [
   "pytest>=8.0",
   "astroquery>=0.4.6",
+  "astropy>=5.3",
+  "lime>=0.2.0.1",
+]
+all = [
+  "astroquery>=0.4.6",
+  "astropy>=5.3",
+  "lime>=0.2.0.1",
+  "coniferest>=0.4.0",
+  "plotly>=5.22.0",
+  "pyvis>=0.3.2",
+  "pillow",
+  "imageio>=2.20",
+  "umap-learn>=0.5.5",
+  "scipy",
+  "pytest>=8.0",
 ]
 
 [project.scripts]
@@ -39,3 +71,4 @@ package-dir = {"" = "src"}
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["astrographanomaly*"]
+exclude = ["tests*", "tools*", "notebooks*"]
