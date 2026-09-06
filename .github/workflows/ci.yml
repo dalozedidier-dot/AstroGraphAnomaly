@@ -24,11 +24,11 @@ jobs:
       - name: Install test deps (pytest)
         run: pip install pytest
 
-      # Optionnel (garde si tu veux tester aussi la voie package)
       - name: Optional editable install (if packaging exists)
         run: |
           if [ -f pyproject.toml ] || [ -f setup.py ]; then
             pip install -e .
+            python -c "import astrographanomaly as m; print('astrographanomaly', m.__version__)"
           fi
 
       - name: Run tests
